@@ -3,14 +3,12 @@
 import asyncio
 import logging
 from pathlib import Path
-from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
 
-logger = logging.getLogger(__name__)
+from screenshot_assets import screenshot_asset_path
 
-SCREENSHOT_DIR = Path("static/screenshots")
-SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+logger = logging.getLogger(__name__)
 
 
 async def take_screenshot(url: str, output_path: Path, width: int = 1920, height: int = 1080) -> bool:
@@ -29,19 +27,12 @@ async def take_screenshot(url: str, output_path: Path, width: int = 1920, height
         return False
 
 
-def _hostname_key(url: str) -> str:
-    parsed = urlparse(url)
-    return parsed.netloc.replace(".", "_")
-
-
 async def screenshot_loop(urls: list[str], interval_seconds: float = 300):
     """Periodically take screenshots of the given URLs."""
     logger.info("Screenshot loop started for %d URLs, interval=%ds", len(urls), interval_seconds)
     while True:
         for url in urls:
-            key = _hostname_key(url)
-            output = SCREENSHOT_DIR / f"{key}.png"
-            await take_screenshot(url, output)
+            await take_screenshot(url, screenshot_asset_path(url))
         await asyncio.sleep(interval_seconds)
 
 

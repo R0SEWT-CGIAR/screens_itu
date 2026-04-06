@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from urllib.parse import quote, unquote, urlparse
@@ -8,8 +9,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from cast_manager import CastManager
+from cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
 from screenshot import start_screenshot_task
+from screenshot_assets import screenshot_asset_key, screenshot_asset_revision
 
 logging.basicConfig(level=logging.INFO)
 
@@ -31,9 +33,13 @@ async def lifespan(app: FastAPI):
     screenshot_task = None
     if unproxyable_urls:
         screenshot_task = start_screenshot_task(unproxyable_urls, interval_seconds=300)
+    watchdog_task = manager.start_watchdog_task(interval_seconds=WATCHDOG_INTERVAL_SECONDS)
     yield
     if screenshot_task:
         screenshot_task.cancel()
+        await asyncio.gather(screenshot_task, return_exceptions=True)
+    watchdog_task.cancel()
+    await asyncio.gather(watchdog_task, return_exceptions=True)
     manager.disconnect()
     await proxy_client.aclose()
 
@@ -53,7 +59,20 @@ def current(cc_id: str):
     state = manager.states.get(cc_id)
     if not state:
         raise HTTPException(404)
-    return {"index": state.current_index, "rotating": state.rotating}
+
+    link = manager._current_link(state)
+    current_url = state.current_url or (link["url"] if link else None)
+    render_mode = "screenshot" if current_url and _use_screenshot(current_url) else "iframe"
+    asset_key = screenshot_asset_key(current_url) if render_mode == "screenshot" and current_url else None
+    asset_revision = screenshot_asset_revision(asset_key)
+    return {
+        "index": state.current_index,
+        "rotating": state.rotating,
+        "current_url": current_url,
+        "render_mode": render_mode,
+        "asset_key": asset_key,
+        "asset_revision": asset_revision,
+    }
 
 
 @app.post("/api/chromecasts/{cc_id}/start")
@@ -138,12 +157,10 @@ def cast_display(cc_id: str = "cc1"):
     for i, link in enumerate(links):
         url = link["url"]
         if _use_screenshot(url):
-            # Screenshot site: use static image
-            parsed = urlparse(url)
-            hostname = parsed.netloc.replace(".", "_")
+            asset_key = screenshot_asset_key(url)
             iframes_html += (
-                f'  <img id="frame-{i}" src="/static/screenshots/{hostname}.png"'
-                f' class="frame" style="display:none; width:1920px; height:1080px; object-fit:cover">\n'
+                f'  <img id="frame-{i}" data-asset-key="{asset_key}"'
+                f' class="frame screenshot-frame" style="display:none; width:1920px; height:1080px; object-fit:cover">\n'
             )
         else:
             src = _iframe_src(url)
@@ -171,6 +188,21 @@ def cast_display(cc_id: str = "cc1"):
 <script>
   const ccId = "{cc_id}";
   let currentIndex = -1;
+  let currentAssetKey = null;
+  let currentAssetRevision = null;
+
+  function screenshotSrc(assetKey, assetRevision) {{
+    const version = assetRevision ?? "pending";
+    return `/static/screenshots/${{assetKey}}.png?v=${{version}}`;
+  }}
+
+  function refreshScreenshotFrame(frame, assetKey, assetRevision) {{
+    if (!frame || !assetKey) return;
+    const nextSrc = screenshotSrc(assetKey, assetRevision);
+    if (frame.getAttribute("src") !== nextSrc) {{
+      frame.setAttribute("src", nextSrc);
+    }}
+  }}
 
   async function poll() {{
     try {{
@@ -181,7 +213,26 @@ def cast_display(cc_id: str = "cc1"):
         if (oldFrame) oldFrame.style.display = "none";
         currentIndex = data.index;
         const newFrame = document.getElementById("frame-" + currentIndex);
+        if (data.render_mode === "screenshot") {{
+          refreshScreenshotFrame(newFrame, data.asset_key, data.asset_revision);
+          currentAssetKey = data.asset_key;
+          currentAssetRevision = data.asset_revision;
+        }} else {{
+          currentAssetKey = null;
+          currentAssetRevision = null;
+        }}
         if (newFrame) newFrame.style.display = "block";
+      }} else if (
+        data.render_mode === "screenshot" &&
+        (data.asset_key !== currentAssetKey || data.asset_revision !== currentAssetRevision)
+      ) {{
+        const currentFrame = document.getElementById("frame-" + currentIndex);
+        refreshScreenshotFrame(currentFrame, data.asset_key, data.asset_revision);
+        currentAssetKey = data.asset_key;
+        currentAssetRevision = data.asset_revision;
+      }} else if (data.render_mode !== "screenshot") {{
+        currentAssetKey = null;
+        currentAssetRevision = null;
       }}
     }} catch (e) {{
       console.error("Poll error:", e);

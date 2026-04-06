@@ -181,7 +181,7 @@
           <div class="dot ${cc.connected ? 'connected' : ''}"></div>
           <div>
             <div class="card-title">${cc.name}</div>
-            <div class="card-subtitle">${cc.host} &bull; ${cc.connected ? 'Conectado' : 'Desconectado'}</div>
+            <div class="card-subtitle">${cc.host} &bull; ${statusLabel(cc)}</div>
           </div>
         </div>
         <div class="now-casting">
@@ -199,6 +199,16 @@
         </div>
       </div>
     `).join('');
+  }
+
+  function statusLabel(cc) {
+    if (!cc.connected) {
+      return cc.last_error ? `Desconectado (${cc.last_error})` : 'Desconectado';
+    }
+    if (!cc.display_ready && (cc.display_launched || cc.rotating || cc.reconnect_attempts > 0)) {
+      return cc.last_error || 'Reconectando';
+    }
+    return 'Conectado';
   }
 
   function renderLinks() {
