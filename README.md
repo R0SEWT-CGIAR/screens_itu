@@ -72,41 +72,49 @@ discover.py          Script de descubrimiento de Chromecasts
 
 ### Flujo de casting
 
+DashCast se carga **una sola vez** con una display page que contiene todos los links en iframes pre-cargados. La rotacion cambia la visibilidad CSS del iframe activo (sin recargar DashCast).
+
 ```
-UI (browser) → API → CastManager → pychromecast/DashCast → Chromecast
+DashCast (una vez) → /cast/display?cc_id=cc1
+                      ↓
+                      N iframes pre-cargados (uno por link)
+                      ↓
+                      Polling /api/current/cc1 cada 2s
+                      ↓
+                      Toggle display:block/none del iframe activo
 ```
 
-DashCast (app ID 84912283) es una app publica de Chromecast que renderiza cualquier URL en el browser integrado del dispositivo.
+- URLs internas (172.x): iframes apuntan a `/proxy/{path}` (proxy reverso)
+- URLs externas: iframes apuntan directo (pueden fallar por X-Frame-Options)
 
-### Proxy reverso
+### Proxy reverso para PRTG (172.25.0.22)
 
-Las URLs internas (172.25.0.22, servidor PRTG) tienen certificado SSL auto-firmado que el browser del Chromecast no acepta. Para resolverlo:
+Las paginas PRTG tienen cert SSL auto-firmado que el Chromecast no acepta. El proxy hace tres cosas criticas:
 
-1. El CastManager reescribe URLs internas a una **wrapper page** servida por este servidor
-2. La wrapper page tiene viewport fijo 1920x1080 y un iframe fullscreen
-3. El iframe apunta a `/proxy/all?url=...` que hace fetch al origen sin verificar SSL
-4. Las URLs absolutas en el HTML/CSS/JS se reescriben para pasar por el proxy
+1. **Bypass SSL:** `httpx` con `verify=False` hace fetch a PRTG y sirve por HTTP plano
+2. **Reescritura de rutas absolutas en HTML:** PRTG usa rutas absolutas (`/css/...`, `/javascript/...`, `/images/...`). El proxy las reescribe a `/proxy/css/...`, `/proxy/javascript/...`, etc. Las rutas relativas (como `mapshow_simple.htm`) no se tocan — resuelven correctamente relativo a la URL del documento.
+3. **Interceptor JS (fetch/XHR):** Se inyecta un script que intercepta `fetch()` y `XMLHttpRequest.open()` para reescribir rutas absolutas en runtime (`/api/...` → `/proxy/api/...`). Sin esto, las APIs de auto-refresh de PRTG fallan con "Lost connection to PRTG server".
 
-Las URLs externas (cgiar.org, cipotato.org) se envian directo al Chromecast con `force=True` en DashCast (bypass de X-Frame-Options). No se pueden proxear porque usan Cloudflare.
+Ver [ADR-002](docs/adr/002-proxy-reverso-para-urls-internas.md) para detalle de enfoques que NO funcionaron (`<base>` tag, proxy universal).
 
 ### API
 
 | Metodo | Ruta | Descripcion |
 |--------|------|-------------|
 | GET | `/api/status` | Estado de Chromecasts, links, intervalo |
+| GET | `/api/current/{id}` | Index actual para polling de la display page |
 | POST | `/api/chromecasts/{id}/start` | Iniciar rotacion automatica |
 | POST | `/api/chromecasts/{id}/stop` | Detener rotacion |
 | POST | `/api/chromecasts/{id}/cast` | Castear URL especifica (body: `{url, label}`) |
 | PUT | `/api/config/interval` | Cambiar intervalo (body: `{seconds}`) |
-| GET | `/cast/view?url=...` | Wrapper page para Chromecast (uso interno) |
-| GET | `/proxy/all?url=...` | Proxy universal con reescritura de URLs |
-| GET | `/proxy/{path}` | Proxy legacy para recursos internos con rutas relativas |
+| GET | `/cast/display?cc_id=...` | Display page con iframes (cargada por DashCast) |
+| GET/POST/PUT | `/proxy/{path}` | Proxy reverso a 172.25.0.22 |
 
 ## Problemas conocidos
 
 - **cipotato.org:** El Revolution Slider no renderiza completamente en el browser del Chromecast (limitacion del hardware/browser integrado).
-- **Cloudflare:** Sitios protegidos por Cloudflare (cipotato.org) no se pueden proxear, van directo al Chromecast.
-- **Viewport externas:** Las URLs externas cargan directo en el Chromecast sin control de viewport (no pasan por la wrapper page).
+- **Cloudflare:** Sitios protegidos por Cloudflare (cipotato.org) no se pueden proxear (challenge JS), van directo al Chromecast.
+- **X-Frame-Options:** URLs externas con `X-Frame-Options: SAMEORIGIN` no cargan en los iframes de la display page.
 - **proxy_base:** La IP del servidor (`172.25.19.179`) esta hardcodeada en `main.py`. Cambiar si la IP de la maquina cambia.
 
 ## ADRs

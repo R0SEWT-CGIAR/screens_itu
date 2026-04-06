@@ -1,7 +1,7 @@
 # ADR-002: Proxy reverso para URLs internas con SSL invalido
 
 ## Estado
-Aceptado
+Aceptado (actualizado)
 
 ## Contexto
 El servidor PRTG (172.25.0.22) usa certificado SSL auto-firmado. El browser del Chromecast no puede aceptar certs invalidos (no hay forma de hacer click en "continuar de todas formas"). Las paginas cargan en blanco.
@@ -16,15 +16,34 @@ El servidor PRTG (172.25.0.22) usa certificado SSL auto-firmado. El browser del 
 Proxy reverso integrado en FastAPI usando httpx con `verify=False`.
 
 ## Implementacion
-- `/proxy/all?url=<url>` — Proxy universal, acepta cualquier URL
-- `/proxy/{path}` — Proxy path-based para 172.25.0.22, las rutas relativas resuelven automaticamente
-- HTML: reescribe URLs absolutas (`href="/..."`, `src="/..."`) para pasar por el proxy
-- CSS/JS: reescribe URLs absolutas al mismo host
-- Otros recursos (imagenes, fonts): pass-through sin modificacion
+
+### Proxy path-based
+`/proxy/{path}?query` → `https://172.25.0.22/{path}?query`
+
+Soporta GET, POST y PUT (PRTG usa POST para algunas APIs).
+
+### Reescritura de URLs en HTML (critico)
+PRTG usa rutas absolutas para recursos (`/css/prtg0.css`, `/javascript/lib/jquery.js`, `/images/refresh.png`). Sin reescritura, estas rutas apuntan a nuestro servidor y dan 404.
+
+La reescritura en el proxy transforma:
+- `href="/css/..."` → `href="/proxy/css/..."`
+- `src="/javascript/..."` → `src="/proxy/javascript/..."`
+- `src="/images/..."` → `src="/proxy/images/..."`
+
+Las rutas relativas (como `mapshow_simple.htm` dentro de `mapshow.htm`) NO se tocan — resuelven correctamente relativo a la URL del documento (`/proxy/public/mapshow.htm` → `/proxy/public/mapshow_simple.htm`).
+
+### Interceptor JS para fetch/XHR (critico)
+La reescritura HTML solo cubre atributos en tags. El JavaScript de PRTG tambien hace requests en runtime con rutas absolutas (`fetch("/api/...")`, `$.ajax("/api/...")`). Para cubrirlos, se inyecta un script que intercepta `window.fetch()` y `XMLHttpRequest.prototype.open()` y reescribe rutas absolutas (`/path` → `/proxy/path`).
+
+### Enfoques descartados que NO funcionaron
+1. **`<base href="/proxy/">`** — Solo afecta URLs relativas en atributos HTML. No afecta rutas absolutas (`/css/...`) ni requests JS. PRTG usa mayoritariamente rutas absolutas.
+2. **`<base href="/proxy/public/">`** — Mismo problema. Ademas rompia rutas absolutas de otros directorios (`/css/`, `/javascript/`).
+3. **Proxy universal (`/proxy/all?url=...`)** — No permite que rutas relativas resuelvan naturalmente. Requiere reescritura completa de todas las URLs en HTML/CSS/JS.
 
 ## Consecuencias
-- (+) El Chromecast accede a contenido interno sin problemas de SSL
-- (+) Las rutas relativas en el HTML resuelven correctamente via `/proxy/{path}`
+- (+) PRTG carga completamente: HTML, CSS, JS, imagenes, APIs de refresh
+- (+) Los mapas PRTG mantienen auto-refresh funcional (las APIs pasan por el proxy)
+- (+) Las rutas relativas resuelven automaticamente (sin reescritura)
 - (-) Agrega latencia (doble hop: Chromecast → servidor → PRTG)
-- (-) La reescritura de URLs es fragil — URLs generadas por JS en runtime no se reescriben
 - (-) Solo funciona si el servidor puede alcanzar 172.25.0.22 (misma red)
+- (-) Si PRTG construye URLs con `window.location.origin` en vez de rutas relativas/absolutas, esas requests no se interceptan

@@ -163,28 +163,79 @@ def cast_display(cc_id: str = "cc1"):
 
 # --- Proxy path-based para 172.25.0.22 ---
 # /proxy/path?query → https://172.25.0.22/path?query
-# Inyecta <base href="/proxy/"> en HTML para que rutas relativas resuelvan via proxy.
+# Inyecta <base> + override de fetch/XHR para que TODO pase por el proxy.
 
-@app.get("/proxy/{path:path}")
-async def proxy_internal(path: str, request: Request):
+# JS que intercepta fetch() y XMLHttpRequest para redirigir por el proxy
+PROXY_INTERCEPT_JS = """
+<script>
+(function() {
+  function rewrite(url) {
+    if (typeof url === 'string' && url.startsWith('/') && !url.startsWith('/proxy/')) {
+      return '/proxy' + url;
+    }
+    return url;
+  }
+  var origFetch = window.fetch;
+  window.fetch = function(input, init) {
+    if (typeof input === 'string') input = rewrite(input);
+    return origFetch.call(this, input, init);
+  };
+  var origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    arguments[1] = rewrite(url);
+    return origOpen.apply(this, arguments);
+  };
+})();
+</script>
+"""
+
+
+async def _proxy_request(method: str, path: str, request: Request) -> Response:
     target = f"https://{INTERNAL_HOST}/{path}"
     if request.url.query:
         target += f"?{request.url.query}"
 
-    resp = await proxy_client.get(target)
+    body = await request.body() if method in ("POST", "PUT", "PATCH") else None
+    headers = {}
+    if "content-type" in request.headers:
+        headers["content-type"] = request.headers["content-type"]
+
+    resp = await proxy_client.request(method, target, content=body, headers=headers)
     content_type = resp.headers.get("content-type", "application/octet-stream")
 
-    body = resp.content
+    resp_body = resp.content
     if "text/html" in content_type:
         text = resp.text
-        # Inyectar <base> para que rutas relativas resuelvan via nuestro proxy
+        # Reescribir rutas absolutas en atributos HTML para que pasen por el proxy
+        # /css/... → /proxy/css/..., /javascript/... → /proxy/javascript/..., etc.
+        text = text.replace('href="/', 'href="/proxy/')
+        text = text.replace("href='/", "href='/proxy/")
+        text = text.replace('src="/', 'src="/proxy/')
+        text = text.replace("src='/", "src='/proxy/")
+        text = text.replace('action="/', 'action="/proxy/')
+        # Inyectar interceptor JS para fetch/XHR en runtime
         if "<head>" in text:
-            text = text.replace("<head>", '<head>\n<base href="/proxy/">', 1)
+            text = text.replace("<head>", f"<head>\n{PROXY_INTERCEPT_JS}", 1)
         elif "<HEAD>" in text:
-            text = text.replace("<HEAD>", '<HEAD>\n<base href="/proxy/">', 1)
-        body = text.encode("utf-8")
+            text = text.replace("<HEAD>", f"<HEAD>\n{PROXY_INTERCEPT_JS}", 1)
+        resp_body = text.encode("utf-8")
 
-    return Response(content=body, status_code=resp.status_code, media_type=content_type)
+    return Response(content=resp_body, status_code=resp.status_code, media_type=content_type)
+
+
+@app.get("/proxy/{path:path}")
+async def proxy_get(path: str, request: Request):
+    return await _proxy_request("GET", path, request)
+
+
+@app.post("/proxy/{path:path}")
+async def proxy_post(path: str, request: Request):
+    return await _proxy_request("POST", path, request)
+
+
+@app.put("/proxy/{path:path}")
+async def proxy_put(path: str, request: Request):
+    return await _proxy_request("PUT", path, request)
 
 
 

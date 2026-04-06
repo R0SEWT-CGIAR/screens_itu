@@ -18,24 +18,32 @@ No tests or linter configured.
 
 ## Architecture
 
-### Casting flow
+### Casting flow (display page approach)
 
-`UI → FastAPI API → CastManager → pychromecast/DashCast → Chromecast`
+DashCast loads ONE page (`/cast/display?cc_id=cc1`) that contains all links as pre-loaded iframes. Rotation toggles CSS visibility — no DashCast reload, no loading screen.
 
-DashCast (app ID 84912283) is a public Chromecast receiver app that renders arbitrary URLs.
+The display page polls `/api/current/{cc_id}` every 2s to know which iframe to show. `CastManager._rotation_loop()` only increments `current_index` — it does NOT call `load_url()` on each rotation.
 
-### Hybrid proxy strategy (critical to understand)
+### PRTG proxy (critical — three layers needed)
 
-There are two types of URLs with different casting strategies:
+Internal URLs (172.25.0.22) need a proxy because PRTG has an invalid SSL cert. The proxy at `/proxy/{path}` does three things that are ALL required:
 
-- **Internal URLs (172.25.0.22, PRTG):** Have invalid self-signed SSL cert that the Chromecast browser rejects. These go through a wrapper page + reverse proxy: `CastManager._proxy_url()` rewrites to `/cast/view?url=...` → wrapper HTML with 1920x1080 iframe → `/proxy/all?url=...` fetches with `verify=False`. DashCast loads with `force=False`.
+1. **SSL bypass:** httpx fetches from PRTG with `verify=False`, serves via HTTP
+2. **HTML URL rewriting:** Rewrites absolute paths in HTML attributes (`href="/css/..."` → `href="/proxy/css/..."`, same for `src`, `action`). Relative paths are NOT touched — they resolve correctly relative to the proxy URL.
+3. **JS fetch/XHR interceptor:** Injected script that overrides `fetch()` and `XMLHttpRequest.open()` to rewrite `/path` → `/proxy/path`. Without this, PRTG's runtime API calls fail with "Lost connection to PRTG server".
 
-- **External URLs (cgiar.org, cipotato.org):** Protected by Cloudflare (can't proxy, returns 403). Sent directly to Chromecast via DashCast with `force=True` (bypasses X-Frame-Options). `TimedDashCastController` always uses `force_launch=True` to relaunch DashCast after force mode replaces the receiver.
+**What does NOT work for PRTG** (documented in ADR-002):
+- `<base href="/proxy/">` — only affects relative URLs in HTML, not absolute paths or JS requests
+- Proxy universal (`/proxy/all?url=...`) — breaks relative URL resolution
+
+### External URLs
+
+Sites behind Cloudflare (cipotato.org) can't be proxied (403 JS challenge). They load directly in iframes on the display page — may fail if the site sets `X-Frame-Options: SAMEORIGIN`.
 
 ### Key classes
 
-- **`CastManager`** (`cast_manager.py`): Manages Chromecast connections, URL routing (proxy vs direct), and rotation via `asyncio.Task`. Connects using `CastInfo` + `HostServiceInfo` (not discovery).
-- **`TimedDashCastController`** (`cast_manager.py`): Subclass of `DashCastController` that logs cast timing and handles the force/force_launch logic.
+- **`CastManager`** (`cast_manager.py`): Manages Chromecast connections, rotation state, and display page launch. `launch_display()` loads DashCast once; `_rotation_loop()` only updates `current_index`.
+- **`TimedDashCastController`** (`cast_manager.py`): Subclass of `DashCastController` with timing logs.
 
 ### Chromecast connection
 

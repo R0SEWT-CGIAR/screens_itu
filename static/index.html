@@ -154,6 +154,7 @@
 
 <script>
   let state = { chromecasts: [], links: [], interval_seconds: 30 };
+  let sliderActive = false;
 
   async function fetchStatus() {
     try {
@@ -166,10 +167,10 @@
   function render() {
     renderChromecasts();
     renderLinks();
-    const slider = document.getElementById('slider');
-    const val = document.getElementById('sliderVal');
-    slider.value = state.interval_seconds;
-    val.textContent = state.interval_seconds;
+    if (!sliderActive) {
+      document.getElementById('slider').value = state.interval_seconds;
+      document.getElementById('sliderVal').textContent = state.interval_seconds;
+    }
   }
 
   function renderChromecasts() {
@@ -242,12 +243,16 @@
     fetchStatus();
   }
 
-  document.getElementById('slider').addEventListener('input', e => {
+  const slider = document.getElementById('slider');
+  slider.addEventListener('input', e => {
+    sliderActive = true;
     document.getElementById('sliderVal').textContent = e.target.value;
   });
+  slider.addEventListener('change', () => { sliderActive = false; });
 
   async function applyInterval() {
-    const seconds = parseFloat(document.getElementById('slider').value);
+    sliderActive = false;
+    const seconds = parseFloat(slider.value);
     await fetch('/api/config/interval', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
