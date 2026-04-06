@@ -13,6 +13,8 @@ from pychromecast.models import CastInfo, HostServiceInfo
 
 logger = logging.getLogger(__name__)
 
+INTERNAL_HOST = "172.25.0.22"
+
 
 class TimedDashCastController(DashCastController):
     """DashCast con logging de tiempos."""
@@ -25,14 +27,7 @@ class TimedDashCastController(DashCastController):
     def load_url(self, url: str, **kwargs) -> None:
         self._send_time = time.monotonic()
         logger.info("[%s] Enviando URL: %s", self.cc_name, url)
-        # URLs internas van por wrapper (nuestra página, sin restricción iframe) → force=False
-        # URLs externas cargan directo en el Chromecast → force=True (bypass X-Frame-Options)
-        is_wrapper = "/cast/view" in url
-        super().load_url(url, force=not is_wrapper, **kwargs)
-
-    def launch(self, *, callback_function=None, force_launch=False):
-        # Siempre force_launch para que DashCast se relance tras force=True
-        super().launch(callback_function=callback_function, force_launch=True)
+        super().load_url(url, **kwargs)
 
     def receive_message(self, message: CastMessage, data: dict) -> bool:
         elapsed = time.monotonic() - self._send_time if self._send_time else 0
@@ -55,12 +50,10 @@ class CastState:
     current_url: Optional[str] = None
     current_label: Optional[str] = None
     connected: bool = False
+    display_launched: bool = False
     task: Optional[asyncio.Task] = field(default=None, repr=False)
     _chromecast: Optional[object] = field(default=None, repr=False)
     _dashcast: Optional[DashCastController] = field(default=None, repr=False)
-
-
-INTERNAL_HOST = "172.25.0.22"
 
 
 class CastManager:
@@ -117,47 +110,59 @@ class CastManager:
                 except Exception:
                     pass
 
-    def _proxy_url(self, url: str) -> str:
-        """URLs internas pasan por wrapper+proxy, externas van directo."""
-        if INTERNAL_HOST in url and self.proxy_base:
-            from urllib.parse import quote
-            return f"{self.proxy_base}/cast/view?url={quote(url, safe='')}"
-        return url
-
-    def cast_url(self, cc_id: str, url: str, label: str = "") -> bool:
+    def launch_display(self, cc_id: str) -> bool:
+        """Carga la display page en el Chromecast (una sola vez)."""
         state = self.states.get(cc_id)
         if not state or not state.connected or not state._dashcast:
             return False
-        try:
-            cast_url = self._proxy_url(url)
-            state._dashcast.load_url(cast_url)
-            state.current_url = url
-            state.current_label = label
+        if state.display_launched:
             return True
-        except Exception as e:
-            logger.error("Error casteando a %s: %s", state.name, e)
+        display_url = f"{self.proxy_base}/cast/display?cc_id={cc_id}"
+        logger.info("Lanzando display page en %s: %s", state.name, display_url)
+        state._dashcast.load_url(display_url)
+        state.display_launched = True
+        return True
+
+    def cast_url(self, cc_id: str, url: str, label: str = "") -> bool:
+        """Cast manual: busca el link por URL y actualiza current_index."""
+        state = self.states.get(cc_id)
+        if not state or not state.connected:
             return False
+        # Buscar el index del link
+        for i, link in enumerate(self.links):
+            if link["url"] == url:
+                state.current_index = i
+                state.current_url = url
+                state.current_label = label
+                # Asegurarse de que la display page este cargada
+                self.launch_display(cc_id)
+                return True
+        return False
 
     async def _rotation_loop(self, cc_id: str) -> None:
+        """Loop de rotacion: solo actualiza current_index, la display page se encarga del render."""
         state = self.states[cc_id]
-        logger.info("Rotación iniciada para %s", state.name)
+        logger.info("Rotacion iniciada para %s", state.name)
         try:
             while state.rotating:
                 link = self.links[state.current_index]
-                logger.info("Casteando [%d] %s → %s", state.current_index, link["label"], state.name)
-                self.cast_url(cc_id, link["url"], link["label"])
-                state.current_index = (state.current_index + 1) % len(self.links)
+                state.current_url = link["url"]
+                state.current_label = link["label"]
+                logger.info("Rotando a [%d] %s en %s", state.current_index, link["label"], state.name)
                 await asyncio.sleep(self.interval)
+                state.current_index = (state.current_index + 1) % len(self.links)
         except asyncio.CancelledError:
-            logger.info("Rotación cancelada para %s", state.name)
+            logger.info("Rotacion cancelada para %s", state.name)
         except Exception as e:
-            logger.exception("Error en rotación de %s: %s", state.name, e)
+            logger.exception("Error en rotacion de %s: %s", state.name, e)
             state.rotating = False
 
     def start_rotation(self, cc_id: str) -> bool:
         state = self.states.get(cc_id)
         if not state or not state.connected:
             return False
+        # Lanzar display page si no esta cargada
+        self.launch_display(cc_id)
         if state.rotating:
             return True
         state.rotating = True
@@ -176,7 +181,6 @@ class CastManager:
 
     def set_interval(self, seconds: float) -> None:
         self.interval = seconds
-        # Reinicia rotaciones activas para que tomen el nuevo intervalo
         for cc_id, state in self.states.items():
             if state.rotating:
                 self.stop_rotation(cc_id)
@@ -196,6 +200,7 @@ class CastManager:
                     "current_url": s.current_url,
                     "current_label": s.current_label,
                     "current_index": s.current_index,
+                    "display_launched": s.display_launched,
                 }
                 for s in self.states.values()
             ],
