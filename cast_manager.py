@@ -59,13 +59,17 @@ class CastState:
     _dashcast: Optional[DashCastController] = field(default=None, repr=False)
 
 
+INTERNAL_HOST = "172.25.0.22"
+
+
 class CastManager:
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self, config_path: str = "config.json", proxy_base: str = ""):
         with open(config_path) as f:
             cfg = json.load(f)
 
         self.links: list[dict] = cfg["links"]
         self.interval: float = cfg["default_interval_seconds"]
+        self.proxy_base: str = proxy_base
         self.states: dict[str, CastState] = {}
         for cc in cfg["chromecasts"]:
             self.states[cc["id"]] = CastState(
@@ -112,12 +116,19 @@ class CastManager:
                 except Exception:
                     pass
 
+    def _proxy_url(self, url: str) -> str:
+        if INTERNAL_HOST in url and self.proxy_base:
+            from urllib.parse import quote
+            return f"{self.proxy_base}/proxy/{quote(url, safe='')}"
+        return url
+
     def cast_url(self, cc_id: str, url: str, label: str = "") -> bool:
         state = self.states.get(cc_id)
         if not state or not state.connected or not state._dashcast:
             return False
         try:
-            state._dashcast.load_url(url)
+            cast_url = self._proxy_url(url)
+            state._dashcast.load_url(cast_url)
             state.current_url = url
             state.current_label = label
             return True
