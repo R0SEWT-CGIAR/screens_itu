@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from urllib.parse import quote, unquote, urlparse
@@ -14,6 +15,7 @@ from screenshot import start_screenshot_task
 from screenshot_assets import screenshot_asset_key, screenshot_asset_revision
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 PROXY_BASE = "http://172.25.19.179:8000"
 PRTG_HOST = "172.25.0.22"
@@ -122,6 +124,16 @@ SCREENSHOT_SITES = {"cipotato.org", "www.cgiar.org", "cgiar.org"}
 def _use_screenshot(url: str) -> bool:
     parsed = urlparse(url)
     return any(host in parsed.netloc for host in SCREENSHOT_SITES)
+
+
+def _is_internal_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return PRTG_HOST in parsed.netloc
+
+
+def _internal_links(links: list[dict] | None = None) -> list[dict]:
+    source_links = manager.links if links is None else links
+    return [link for link in source_links if _is_internal_url(link["url"])]
 
 
 def _can_proxy(url: str) -> bool:
@@ -241,6 +253,269 @@ def cast_display(cc_id: str = "cc1"):
 
   poll();
   setInterval(poll, 2000);
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+@app.get("/cast/startup-check")
+def cast_startup_check(cc_id: str = "cc1"):
+    links = manager.links
+    if not links:
+        return HTMLResponse(
+            content="""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920,initial-scale=1">
+<style>
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #000;
+    color: #fff;
+    font-family: system-ui, sans-serif;
+  }
+</style>
+</head>
+<body>No hay paginas configuradas para la comprobacion</body>
+</html>""",
+        )
+
+    frames_html = ""
+    labels = []
+    urls = []
+    for i, link in enumerate(links):
+        url = link["url"]
+        if _use_screenshot(url):
+            asset_key = screenshot_asset_key(url)
+            asset_revision = screenshot_asset_revision(asset_key)
+            asset_version = asset_revision if asset_revision is not None else "pending"
+            src = f"/static/screenshots/{asset_key}.png?v={asset_version}"
+            frames_html += (
+                f'  <img id="startup-frame-{i}" src="{src}"'
+                f' class="frame" style="display:none; width:1920px; height:1080px; object-fit:cover">\n'
+            )
+        else:
+            src = _iframe_src(url)
+            frames_html += f'  <iframe id="startup-frame-{i}" src="{src}" class="frame" style="display:none"></iframe>\n'
+        labels.append(link["label"])
+        urls.append(url)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920,initial-scale=1">
+<style>
+  * {{ margin: 0; padding: 0; }}
+  html, body {{ width: 1920px; height: 1080px; overflow: hidden; background: #000; }}
+  .frame {{
+    position: absolute;
+    top: 0; left: 0;
+    width: 1920px;
+    height: 1080px;
+    border: none;
+  }}
+  .debug-overlay {{
+    position: absolute;
+    top: 24px;
+    left: 24px;
+    z-index: 10;
+    min-width: 440px;
+    max-width: 760px;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background: rgba(15, 23, 42, 0.88);
+    color: #f8fafc;
+    font-family: system-ui, sans-serif;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  }}
+  .debug-kicker {{
+    font-size: 14px;
+    color: #93c5fd;
+    margin-bottom: 8px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }}
+  .debug-title {{
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 6px;
+  }}
+  .debug-meta {{
+    font-size: 16px;
+    color: #cbd5e1;
+    margin-bottom: 6px;
+  }}
+  .debug-url {{
+    font-size: 14px;
+    color: #94a3b8;
+    word-break: break-all;
+  }}
+  .debug-list {{
+    margin-top: 14px;
+    display: grid;
+    gap: 8px;
+  }}
+  .debug-item {{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(30, 41, 59, 0.9);
+  }}
+  .debug-item.active {{
+    outline: 1px solid rgba(147, 197, 253, 0.8);
+    background: rgba(30, 64, 175, 0.28);
+  }}
+  .debug-item-name {{
+    font-size: 14px;
+    color: #e2e8f0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }}
+  .debug-badge {{
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }}
+  .debug-badge.pending {{
+    background: rgba(245, 158, 11, 0.18);
+    color: #fbbf24;
+  }}
+  .debug-badge.loaded {{
+    background: rgba(34, 197, 94, 0.18);
+    color: #86efac;
+  }}
+  .debug-badge.timeout {{
+    background: rgba(239, 68, 68, 0.18);
+    color: #fda4af;
+  }}
+  .debug-badge.error {{
+    background: rgba(190, 24, 93, 0.22);
+    color: #f9a8d4;
+  }}
+</style>
+</head>
+<body>
+{frames_html}
+<div class="debug-overlay">
+  <div class="debug-kicker">Debug interno</div>
+  <div class="debug-title" id="debugTitle">Inicializando comprobacion</div>
+  <div class="debug-meta" id="debugMeta">Preparando rotacion de paginas configuradas</div>
+  <div class="debug-url" id="debugUrl"></div>
+  <div class="debug-list" id="debugList"></div>
+</div>
+<script>
+  const frameCount = {len(links)};
+  const stepMs = 10000;
+  const loadTimeoutMs = 30000;
+  const labels = {json.dumps(labels, ensure_ascii=True)};
+  const urls = {json.dumps(urls, ensure_ascii=True)};
+  const frames = Array.from({{ length: frameCount }}, (_, index) =>
+    document.getElementById("startup-frame-" + index)
+  );
+  const frameStates = Array.from({{ length: frameCount }}, () => "pendiente");
+  let currentIndex = -1;
+
+  function statusLabel(status) {{
+    if (status === "loaded") return "Cargada";
+    if (status === "timeout") return "Sin respuesta";
+    if (status === "error") return "Error";
+    return "Pendiente";
+  }}
+
+  function renderDebugList() {{
+    const list = document.getElementById("debugList");
+    list.innerHTML = "";
+
+    labels.forEach((label, index) => {{
+      const item = document.createElement("div");
+      item.className = "debug-item" + (index === currentIndex ? " active" : "");
+
+      const name = document.createElement("div");
+      name.className = "debug-item-name";
+      name.textContent = `${{index + 1}}. ${{label}}`;
+
+      const badge = document.createElement("div");
+      badge.className = "debug-badge " + frameStates[index];
+      badge.textContent = statusLabel(frameStates[index]);
+
+      item.appendChild(name);
+      item.appendChild(badge);
+      list.appendChild(item);
+    }});
+  }}
+
+  function showFrame(index) {{
+    const oldFrame = document.getElementById("startup-frame-" + currentIndex);
+    if (oldFrame) oldFrame.style.display = "none";
+    currentIndex = index;
+    const frame = document.getElementById("startup-frame-" + currentIndex);
+    if (frame) frame.style.display = "block";
+    document.getElementById("debugTitle").textContent = labels[index] || `Pagina ${{index + 1}}`;
+    document.getElementById("debugMeta").textContent =
+      `Paso ${{index + 1}} de ${{frameCount}} · cambio cada ${{stepMs / 1000}}s`;
+    document.getElementById("debugUrl").textContent = urls[index] || "";
+    renderDebugList();
+  }}
+
+  function finishSequence() {{
+    document.getElementById("debugMeta").textContent =
+      `Comprobacion finalizada · ultima pagina visible`;
+    renderDebugList();
+  }}
+
+  function advance(nextIndex) {{
+    if (nextIndex >= frameCount) {{
+      finishSequence();
+      return;
+    }}
+
+    setTimeout(() => {{
+      showFrame(nextIndex);
+      advance(nextIndex + 1);
+    }}, stepMs);
+  }}
+
+  frames.forEach((frame, index) => {{
+    const timeoutId = setTimeout(() => {{
+      if (frameStates[index] === "pendiente") {{
+        frameStates[index] = "timeout";
+        renderDebugList();
+      }}
+    }}, loadTimeoutMs);
+
+    frame.addEventListener("load", () => {{
+      clearTimeout(timeoutId);
+      frameStates[index] = "loaded";
+      renderDebugList();
+    }});
+
+    frame.addEventListener("error", () => {{
+      clearTimeout(timeoutId);
+      frameStates[index] = "error";
+      renderDebugList();
+    }});
+  }});
+
+  renderDebugList();
+  showFrame(0);
+  advance(1);
 </script>
 </body>
 </html>"""

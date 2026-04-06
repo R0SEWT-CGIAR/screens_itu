@@ -143,6 +143,9 @@
   <input type="range" id="slider" min="5" max="300" step="5" value="30">
   <span class="interval-val"><span id="sliderVal">30</span>s</span>
   <button class="btn-apply" onclick="applyInterval()">Aplicar</button>
+  <a class="btn-apply" href="/cast/startup-check" target="_blank" rel="noopener noreferrer" style="text-decoration:none; display:inline-flex; align-items:center;">
+    Debug interno
+  </a>
 </div>
 
 <div class="grid" id="chromecasts"></div>
@@ -186,10 +189,7 @@
         </div>
         <div class="now-casting">
           <div class="label">En pantalla</div>
-          ${cc.current_label
-            ? `<div class="title">${cc.current_label}</div><div class="url">${cc.current_url}</div>`
-            : `<div class="url" style="color:#475569">—</div>`
-          }
+          ${currentContent(cc)}
         </div>
         <div>
           ${cc.rotating
@@ -209,6 +209,14 @@
       return cc.last_error || 'Reconectando';
     }
     return 'Conectado';
+  }
+
+  function currentContent(cc) {
+    if (cc.current_label) {
+      return `<div class="title">${cc.current_label}</div><div class="url">${cc.current_url}</div>`;
+    }
+
+    return `<div class="url" style="color:#475569">—</div>`;
   }
 
   function renderLinks() {

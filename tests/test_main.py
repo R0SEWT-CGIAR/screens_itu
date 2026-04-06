@@ -24,6 +24,14 @@ def write_config(config_path: Path) -> None:
                 "links": [
                     {"url": "https://www.cgiar.org/landing", "label": "Screenshot"},
                     {"url": "https://example.com/dashboard", "label": "Iframe"},
+                    {
+                        "url": "https://172.25.0.22/public/mapshow.htm?id=1",
+                        "label": "Internal 1",
+                    },
+                    {
+                        "url": "https://172.25.0.22/public/mapshow.htm?id=2",
+                        "label": "Internal 2",
+                    },
                 ],
                 "default_interval_seconds": 30,
             }
@@ -88,3 +96,31 @@ class MainRouteTests(unittest.TestCase):
         self.assertIn("refreshScreenshotFrame", html)
         self.assertIn("/static/screenshots/${assetKey}.png?v=${version}", html)
         self.assertIn('<iframe id="frame-1"', html)
+
+    def test_cast_startup_check_uses_all_configured_links(self):
+        response = main.cast_startup_check("cc1")
+        html = response.body.decode("utf-8")
+
+        self.assertIn('startup-frame-0', html)
+        self.assertIn('startup-frame-3', html)
+        screenshot_key = screenshot_assets.screenshot_asset_key(main.manager.links[0]["url"])
+        self.assertIn(f"/static/screenshots/{screenshot_key}.png?v=", html)
+        self.assertIn("/p/https%3A%2F%2Fexample.com/dashboard", html)
+        self.assertIn("/proxy/public/mapshow.htm?id=1", html)
+        self.assertIn("/proxy/public/mapshow.htm?id=2", html)
+        self.assertIn("const stepMs = 10000;", html)
+        self.assertIn("const loadTimeoutMs = 30000;", html)
+        self.assertIn("Debug interno", html)
+        self.assertIn('id="debugList"', html)
+        self.assertIn("renderDebugList", html)
+        self.assertIn("Cargada", html)
+        self.assertIn("Sin respuesta", html)
+        self.assertIn("Pendiente", html)
+        self.assertIn("Comprobacion finalizada", html)
+        self.assertIn("ultima pagina visible", html)
+        self.assertIn("Screenshot", html)
+        self.assertIn("Iframe", html)
+        self.assertIn("Internal 1", html)
+        self.assertIn("Internal 2", html)
+        self.assertNotIn("/api/current/", html)
+        self.assertNotIn("startup-check-complete", html)

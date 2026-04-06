@@ -96,6 +96,19 @@ DashCast (una vez) → /cast/display?cc_id=cc1
 - URLs marcadas como screenshot (`cgiar.org`, `cipotato.org`): la display page usa `<img>` y refresca el `src` con `?v={mtime_ns}` cuando cambia el PNG en disco
 - Las capturas se indexan por URL completa: `hostname_sanitized + sha256(url)[:12]`
 
+### Debug interno
+
+La comprobacion de operatividad ahora es una herramienta manual para la persona que lanza la app:
+
+- enlace: `/cast/startup-check`
+- acceso: boton `Debug interno` en la UI principal
+- contenido: todas las URLs configuradas
+- secuencia: una pagina cada 10s, una sola vuelta completa
+- final: la ultima pagina configurada queda visible
+- panel: muestra el estado de cada pantalla (`Pendiente`, `Cargada`, `Sin respuesta`, `Error`)
+
+La pagina es autonoma y no hace polling a `/api/current/{cc_id}`. Sirve para validar en navegador el pipeline real de cada pantalla antes de interactuar con los Chromecast.
+
 ### Endurance de Chromecast
 
 Un watchdog asíncrono corre cada 15s y verifica por dispositivo:
@@ -121,13 +134,14 @@ Ver [ADR-002](docs/adr/002-proxy-reverso-para-urls-internas.md) para detalle de 
 
 | Metodo | Ruta | Descripcion |
 |--------|------|-------------|
-| GET | `/api/status` | Estado de Chromecasts, links, intervalo |
+| GET | `/api/status` | Estado de Chromecasts, links e intervalo |
 | GET | `/api/current/{id}` | Estado actual de render (`index`, `current_url`, `render_mode`, `asset_key`, `asset_revision`) |
 | POST | `/api/chromecasts/{id}/start` | Iniciar rotacion automatica |
 | POST | `/api/chromecasts/{id}/stop` | Detener rotacion |
 | POST | `/api/chromecasts/{id}/cast` | Castear URL especifica (body: `{url, label}`) |
 | PUT | `/api/config/interval` | Cambiar intervalo (body: `{seconds}`) |
 | GET | `/cast/display?cc_id=...` | Display page con iframes (cargada por DashCast) |
+| GET | `/cast/startup-check` | Pagina autonoma de debug para URLs internas |
 | GET/POST/PUT | `/proxy/{path}` | Proxy reverso a 172.25.0.22 |
 
 ## Problemas conocidos
