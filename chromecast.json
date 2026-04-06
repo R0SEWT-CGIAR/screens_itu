@@ -1,0 +1,16 @@
+[
+  {
+    "name": "ITU CHROMECAST 3",
+    "host": "172.25.19.185",
+    "port": 8009,
+    "model_name": "Chromecast",
+    "uuid": "99e15c34-34cb-5513-49b9-fced4223e981"
+  },
+  {
+    "name": "ITU_Chromecast 1",
+    "host": "172.25.19.171",
+    "port": 8009,
+    "model_name": "Chromecast",
+    "uuid": "add083f9-01dd-db70-7bea-a2bfb817c86e"
+  }
+]

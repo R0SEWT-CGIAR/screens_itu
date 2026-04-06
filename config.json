@@ -1,0 +1,45 @@
+{
+  "chromecasts": [
+    {
+      "id": "cc1",
+      "name": "ITU_Chromecast 1",
+      "host": "172.25.19.171",
+      "port": 8009,
+      "uuid": "add083f9-01dd-db70-7bea-a2bfb817c86e"
+    },
+    {
+      "id": "cc2",
+      "name": "ITU CHROMECAST 3",
+      "host": "172.25.19.185",
+      "port": 8009,
+      "uuid": "99e15c34-34cb-5513-49b9-fced4223e981"
+    }
+  ],
+  "links": [
+    {
+      "url": "https://172.25.0.22/public/mapshow.htm?id=5254&mapid=756289B0-4176-4C48-AB30-EF8F48B6D9BD",
+      "label": "Servicios activos"
+    },
+    {
+      "url": "https://172.25.0.22/public/mapshow.htm?id=5530&mapid=E47F7755-5A46-42A0-B0FD-37695AE45EED",
+      "label": "Estado de la red"
+    },
+    {
+      "url": "https://172.25.0.22/public/mapshow.htm?id=5380&mapid=E0352718-B093-461A-8A3F-0AF536DCF406",
+      "label": "Mapa de estaciones de la papa"
+    },
+    {
+      "url": "https://www.cgiar.org/",
+      "label": "CGIAR landing"
+    },
+    {
+      "url": "https://cipotato.org/",
+      "label": "CIP landing"
+    },
+    {
+      "url": "https://gigwa.cgiar.org/",
+      "label": "GIGWA"
+    }
+  ],
+  "default_interval_seconds": 30
+}

@@ -1,0 +1,12 @@
+https://172.25.0.22/public/mapshow.htm?id=5254&mapid=756289B0-4176-4C48-AB30-EF8F48B6D9BD, servicios activos
+
+https://www.cgiar.org/, cgiar landing
+
+https://172.25.0.22/public/mapshow.htm?id=5530&mapid=E47F7755-5A46-42A0-B0FD-37695AE45EED, estado de la red
+
+https://cipotato.org/, cipotato landing
+
+
+https://172.25.0.22/public/mapshow.htm?id=5380&mapid=E0352718-B093-461A-8A3F-0AF536DCF406, mapa de estaciones de la papa
+
+https://gigwa.cgiar.org/, mapa de gigwa
