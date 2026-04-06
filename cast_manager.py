@@ -25,12 +25,13 @@ class TimedDashCastController(DashCastController):
     def load_url(self, url: str, **kwargs) -> None:
         self._send_time = time.monotonic()
         logger.info("[%s] Enviando URL: %s", self.cc_name, url)
-        # force=True para evitar restricciones de iframe (X-Frame-Options)
-        # force_launch=True para relanzar DashCast cada vez (necesario tras force)
-        kwargs.pop("force", None)
-        super().load_url(url, force=True, **kwargs)
+        # URLs internas van por wrapper (nuestra página, sin restricción iframe) → force=False
+        # URLs externas cargan directo en el Chromecast → force=True (bypass X-Frame-Options)
+        is_wrapper = "/cast/view" in url
+        super().load_url(url, force=not is_wrapper, **kwargs)
 
     def launch(self, *, callback_function=None, force_launch=False):
+        # Siempre force_launch para que DashCast se relance tras force=True
         super().launch(callback_function=callback_function, force_launch=True)
 
     def receive_message(self, message: CastMessage, data: dict) -> bool:
@@ -117,9 +118,10 @@ class CastManager:
                     pass
 
     def _proxy_url(self, url: str) -> str:
+        """URLs internas pasan por wrapper+proxy, externas van directo."""
         if INTERNAL_HOST in url and self.proxy_base:
             from urllib.parse import quote
-            return f"{self.proxy_base}/proxy/{quote(url, safe='')}"
+            return f"{self.proxy_base}/cast/view?url={quote(url, safe='')}"
         return url
 
     def cast_url(self, cc_id: str, url: str, label: str = "") -> bool:

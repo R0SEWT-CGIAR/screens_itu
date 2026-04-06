@@ -1,9 +1,9 @@
 import logging
 from contextlib import asynccontextmanager
-from urllib.parse import quote, unquote
+from urllib.parse import quote, urlparse
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
@@ -14,6 +14,8 @@ logging.basicConfig(level=logging.INFO)
 
 manager = CastManager(proxy_base="http://172.25.19.179:8000")
 proxy_client: httpx.AsyncClient | None = None
+
+INTERNAL_HOST = "172.25.0.22"
 
 
 @asynccontextmanager
@@ -74,31 +76,88 @@ async def set_interval(body: IntervalRequest):
     return {"ok": True, "interval_seconds": body.seconds}
 
 
-# --- Proxy para URLs internas con cert inválido ---
+# --- Wrapper page para Chromecast ---
 
-INTERNAL_HOST = "172.25.0.22"
+WRAPPER_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920,initial-scale=1">
+<style>
+  * { margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #000; }
+  iframe {
+    width: 1920px;
+    height: 1080px;
+    border: none;
+    overflow: hidden;
+  }
+</style>
+</head>
+<body>
+<iframe src="{iframe_src}" scrolling="no" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+</body>
+</html>"""
 
 
-def to_proxy_url(url: str, request: Request | None = None, host_header: str = "") -> str:
-    """Convierte una URL interna a su versión proxied."""
-    if INTERNAL_HOST not in url:
-        return url
-    base = host_header or (str(request.base_url).rstrip("/") if request else "")
-    return f"{base}/proxy/{quote(url, safe='')}"
+@app.get("/cast/view")
+def cast_view(url: str):
+    encoded = quote(url, safe="")
+    iframe_src = f"/proxy/all?url={encoded}"
+    html = WRAPPER_HTML.replace("{iframe_src}", iframe_src)
+    return HTMLResponse(content=html)
 
 
-@app.get("/proxy/{target_url:path}")
-async def proxy(target_url: str):
-    url = unquote(target_url)
-    if INTERNAL_HOST not in url:
-        raise HTTPException(400, "Solo se permite proxy a hosts internos")
+# --- Proxy universal ---
+
+@app.get("/proxy/all")
+async def proxy_all(url: str, request: Request):
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        raise HTTPException(400, "URL inválida")
+
     resp = await proxy_client.get(url)
-    content_type = resp.headers.get("content-type", "text/html")
-    body = resp.text
-    # Reescribir referencias internas dentro del HTML para que pasen por el proxy
+    content_type = resp.headers.get("content-type", "application/octet-stream")
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    body = resp.content
     if "text/html" in content_type:
-        body = body.replace(f"https://{INTERNAL_HOST}", f"/proxy/{quote(f'https://{INTERNAL_HOST}', safe='')}")
-    return HTMLResponse(content=body, status_code=resp.status_code)
+        text = resp.text
+        # Inyectar <base> para que URLs relativas resuelvan al origen original via proxy
+        base_tag = f'<base href="/proxy/all?url={quote(origin, safe="")}" />'
+        # Reescribir URLs absolutas al mismo host para que pasen por el proxy
+        text = text.replace(f'href="/', f'href="/proxy/all?url={quote(origin + "/", safe="")}')
+        text = text.replace(f"href='/", f"href='/proxy/all?url={quote(origin + '/', safe='')}")
+        text = text.replace(f'src="/', f'src="/proxy/all?url={quote(origin + "/", safe="")}')
+        text = text.replace(f"src='/", f"src='/proxy/all?url={quote(origin + '/', safe='')}")
+        text = text.replace(f'action="/', f'action="/proxy/all?url={quote(origin + "/", safe="")}')
+        # Reescribir URLs absolutas completas
+        text = text.replace(origin + "/", f"/proxy/all?url={quote(origin + '/', safe='')}")
+        text = text.replace(origin + '"', f'/proxy/all?url={quote(origin, safe="")}' + '"')
+        # Inyectar viewport meta si no existe
+        if '<meta name="viewport"' not in text.lower():
+            text = text.replace("<head>", '<head><meta name="viewport" content="width=1920">', 1)
+            text = text.replace("<HEAD>", '<HEAD><meta name="viewport" content="width=1920">', 1)
+        body = text.encode("utf-8")
+    elif "text/css" in content_type or "javascript" in content_type:
+        text = resp.text
+        text = text.replace(origin, f"/proxy/all?url={quote(origin, safe='')}")
+        body = text.encode("utf-8")
+
+    return Response(content=body, status_code=resp.status_code, media_type=content_type)
+
+
+# --- Proxy interno legacy (para recursos con rutas relativas de 172.25.0.22) ---
+
+@app.get("/proxy/{path:path}")
+async def proxy_internal(path: str, request: Request):
+    target = f"https://{INTERNAL_HOST}/{path}"
+    if request.url.query:
+        target += f"?{request.url.query}"
+
+    resp = await proxy_client.get(target)
+    content_type = resp.headers.get("content-type", "application/octet-stream")
+    return Response(content=resp.content, status_code=resp.status_code, media_type=content_type)
 
 
 # --- Static / UI ---
