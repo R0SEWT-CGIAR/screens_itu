@@ -29,6 +29,10 @@ class TimedDashCastController(DashCastController):
         logger.info("[%s] Enviando URL: %s", self.cc_name, url)
         super().load_url(url, **kwargs)
 
+    def launch(self, *, callback_function=None, force_launch=False):
+        # Siempre force_launch para poder relanzar tras cast directo
+        super().launch(callback_function=callback_function, force_launch=True)
+
     def receive_message(self, message: CastMessage, data: dict) -> bool:
         elapsed = time.monotonic() - self._send_time if self._send_time else 0
         logger.info(
@@ -111,7 +115,7 @@ class CastManager:
                     pass
 
     def launch_display(self, cc_id: str) -> bool:
-        """Carga la display page en el Chromecast (una sola vez)."""
+        """Carga la display page en el Chromecast."""
         state = self.states.get(cc_id)
         if not state or not state.connected or not state._dashcast:
             return False
@@ -121,6 +125,24 @@ class CastManager:
         logger.info("Lanzando display page en %s: %s", state.name, display_url)
         state._dashcast.load_url(display_url)
         state.display_launched = True
+        return True
+
+    def _relaunch_display(self, cc_id: str) -> None:
+        """Fuerza relanzar la display page (tras un cast directo)."""
+        state = self.states.get(cc_id)
+        if not state:
+            return
+        state.display_launched = False
+        self.launch_display(cc_id)
+
+    def cast_direct(self, cc_id: str, url: str) -> bool:
+        """Cast directo con DashCast force=True (para externas sin iframe)."""
+        state = self.states.get(cc_id)
+        if not state or not state.connected or not state._dashcast:
+            return False
+        logger.info("Cast directo (force) a %s: %s", state.name, url)
+        state._dashcast.load_url(url, force=True)
+        state.display_launched = False  # La display page fue reemplazada
         return True
 
     def cast_url(self, cc_id: str, url: str, label: str = "") -> bool:
@@ -139,8 +161,15 @@ class CastManager:
                 return True
         return False
 
+    def _can_proxy(self, url: str) -> bool:
+        """URLs que no se pueden proxear (Cloudflare JS challenge)."""
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        unproxyable = {"cipotato.org"}
+        return not any(host in parsed.netloc for host in unproxyable)
+
     async def _rotation_loop(self, cc_id: str) -> None:
-        """Loop de rotacion: solo actualiza current_index, la display page se encarga del render."""
+        """Loop de rotacion: todo via display page (iframes para proxyables, screenshots para el resto)."""
         state = self.states[cc_id]
         logger.info("Rotacion iniciada para %s", state.name)
         try:
@@ -149,6 +178,11 @@ class CastManager:
                 state.current_url = link["url"]
                 state.current_label = link["label"]
                 logger.info("Rotando a [%d] %s en %s", state.current_index, link["label"], state.name)
+
+                # Asegurar display page cargada (todo pasa por ella)
+                if not state.display_launched:
+                    self._relaunch_display(cc_id)
+
                 await asyncio.sleep(self.interval)
                 state.current_index = (state.current_index + 1) % len(self.links)
         except asyncio.CancelledError:
