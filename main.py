@@ -32,9 +32,14 @@ async def lifespan(app: FastAPI):
     manager.connect()
     # Start screenshot task for unproxyable URLs
     unproxyable_urls = [l["url"] for l in manager.links if _use_screenshot(l["url"])]
+    with open("config.json") as f:
+        _cfg = json.load(f)
+    gif_duration = _cfg.get("screenshot_gif_duration_seconds", 60)
     screenshot_task = None
     if unproxyable_urls:
-        screenshot_task = start_screenshot_task(unproxyable_urls, interval_seconds=300)
+        screenshot_task = start_screenshot_task(
+            unproxyable_urls, interval_seconds=300, gif_duration_seconds=gif_duration
+        )
     watchdog_task = manager.start_watchdog_task(interval_seconds=WATCHDOG_INTERVAL_SECONDS)
     yield
     if screenshot_task:
@@ -198,57 +203,63 @@ def cast_display(cc_id: str = "cc1"):
 <body>
 {iframes_html}
 <script>
-  const ccId = "{cc_id}";
-  let currentIndex = -1;
-  let currentAssetKey = null;
-  let currentAssetRevision = null;
+  var ccId = "{cc_id}";
+  var currentIndex = -1;
+  var currentAssetKey = null;
+  var currentAssetRevision = null;
 
   function screenshotSrc(assetKey, assetRevision) {{
-    const version = assetRevision ?? "pending";
-    return `/static/screenshots/${{assetKey}}.png?v=${{version}}`;
+    var version = assetRevision || "pending";
+    return "/static/screenshots/" + assetKey + ".gif?v=" + version;
   }}
 
   function refreshScreenshotFrame(frame, assetKey, assetRevision) {{
     if (!frame || !assetKey) return;
-    const nextSrc = screenshotSrc(assetKey, assetRevision);
+    var nextSrc = screenshotSrc(assetKey, assetRevision);
     if (frame.getAttribute("src") !== nextSrc) {{
       frame.setAttribute("src", nextSrc);
     }}
   }}
 
-  async function poll() {{
-    try {{
-      const res = await fetch("/api/current/" + ccId);
-      const data = await res.json();
-      if (data.index !== currentIndex) {{
-        const oldFrame = document.getElementById("frame-" + currentIndex);
-        if (oldFrame) oldFrame.style.display = "none";
-        currentIndex = data.index;
-        const newFrame = document.getElementById("frame-" + currentIndex);
-        if (data.render_mode === "screenshot") {{
-          refreshScreenshotFrame(newFrame, data.asset_key, data.asset_revision);
+  function poll() {{
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/api/current/" + ccId, true);
+    xhr.onreadystatechange = function() {{
+      if (xhr.readyState !== 4) return;
+      if (xhr.status !== 200) return;
+      try {{
+        var data = JSON.parse(xhr.responseText);
+        if (data.index !== currentIndex) {{
+          var oldFrame = document.getElementById("frame-" + currentIndex);
+          if (oldFrame) oldFrame.style.display = "none";
+          currentIndex = data.index;
+          var newFrame = document.getElementById("frame-" + currentIndex);
+          if (data.render_mode === "screenshot") {{
+            refreshScreenshotFrame(newFrame, data.asset_key, data.asset_revision);
+            currentAssetKey = data.asset_key;
+            currentAssetRevision = data.asset_revision;
+          }} else {{
+            currentAssetKey = null;
+            currentAssetRevision = null;
+          }}
+          if (newFrame) newFrame.style.display = "block";
+        }} else if (
+          data.render_mode === "screenshot" &&
+          (data.asset_key !== currentAssetKey || data.asset_revision !== currentAssetRevision)
+        ) {{
+          var curFrame = document.getElementById("frame-" + currentIndex);
+          refreshScreenshotFrame(curFrame, data.asset_key, data.asset_revision);
           currentAssetKey = data.asset_key;
           currentAssetRevision = data.asset_revision;
-        }} else {{
+        }} else if (data.render_mode !== "screenshot") {{
           currentAssetKey = null;
           currentAssetRevision = null;
         }}
-        if (newFrame) newFrame.style.display = "block";
-      }} else if (
-        data.render_mode === "screenshot" &&
-        (data.asset_key !== currentAssetKey || data.asset_revision !== currentAssetRevision)
-      ) {{
-        const currentFrame = document.getElementById("frame-" + currentIndex);
-        refreshScreenshotFrame(currentFrame, data.asset_key, data.asset_revision);
-        currentAssetKey = data.asset_key;
-        currentAssetRevision = data.asset_revision;
-      }} else if (data.render_mode !== "screenshot") {{
-        currentAssetKey = null;
-        currentAssetRevision = null;
+      }} catch (e) {{
+        /* ignore parse errors */
       }}
-    }} catch (e) {{
-      console.error("Poll error:", e);
-    }}
+    }};
+    xhr.send();
   }}
 
   poll();
@@ -296,7 +307,7 @@ def cast_startup_check(cc_id: str = "cc1"):
             asset_key = screenshot_asset_key(url)
             asset_revision = screenshot_asset_revision(asset_key)
             asset_version = asset_revision if asset_revision is not None else "pending"
-            src = f"/static/screenshots/{asset_key}.png?v={asset_version}"
+            src = f"/static/screenshots/{asset_key}.gif?v={asset_version}"
             frames_html += (
                 f'  <img id="startup-frame-{i}" src="{src}"'
                 f' class="frame" style="display:none; width:1920px; height:1080px; object-fit:cover">\n'

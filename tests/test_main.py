@@ -94,7 +94,7 @@ class MainRouteTests(unittest.TestCase):
 
         self.assertIn(f'data-asset-key="{screenshot_key}"', html)
         self.assertIn("refreshScreenshotFrame", html)
-        self.assertIn("/static/screenshots/${assetKey}.png?v=${version}", html)
+        self.assertIn("/static/screenshots/${assetKey}.gif?v=${version}", html)
         self.assertIn('<iframe id="frame-1"', html)
 
     def test_cast_startup_check_uses_all_configured_links(self):
@@ -104,7 +104,7 @@ class MainRouteTests(unittest.TestCase):
         self.assertIn('startup-frame-0', html)
         self.assertIn('startup-frame-3', html)
         screenshot_key = screenshot_assets.screenshot_asset_key(main.manager.links[0]["url"])
-        self.assertIn(f"/static/screenshots/{screenshot_key}.png?v=", html)
+        self.assertIn(f"/static/screenshots/{screenshot_key}.gif?v=", html)
         self.assertIn("/p/https%3A%2F%2Fexample.com/dashboard", html)
         self.assertIn("/proxy/public/mapshow.htm?id=1", html)
         self.assertIn("/proxy/public/mapshow.htm?id=2", html)

@@ -20,7 +20,7 @@ def screenshot_asset_key(url: str) -> str:
 
 
 def screenshot_asset_path_for_key(asset_key: str) -> Path:
-    return SCREENSHOT_DIR / f"{asset_key}.png"
+    return SCREENSHOT_DIR / f"{asset_key}.gif"
 
 
 def screenshot_asset_path(url: str) -> Path:

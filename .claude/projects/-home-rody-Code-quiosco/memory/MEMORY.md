@@ -1,0 +1,1 @@
+- [DashCast JS compat](feedback_dashcast_js_compat.md) — DashCast requires ES5-only JS; modern features cause silent black screen
