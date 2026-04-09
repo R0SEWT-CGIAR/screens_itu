@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 DASHCAST_APP_ID = "84912283"
 WATCHDOG_INTERVAL_SECONDS = 15.0
+DISCOVERY_COOLDOWN_SECONDS = 60.0
 
 
 class TimedDashCastController(DashCastController):
@@ -71,9 +72,11 @@ class CastManager:
         with open(config_path) as f:
             cfg = json.load(f)
 
+        self.config_path: str = config_path
         self.links: list[dict] = cfg["links"]
         self.interval: float = cfg["default_interval_seconds"]
         self.proxy_base: str = proxy_base
+        self._last_discovery_time: float = 0.0
         self.states: dict[str, CastState] = {}
         for cc in cfg["chromecasts"]:
             self.states[cc["id"]] = CastState(
@@ -314,6 +317,43 @@ class CastManager:
         state.last_seen_at = self._utcnow()
         return True, None
 
+    def _discover_by_name(self, name: str) -> Optional[tuple[str, int]]:
+        if time.monotonic() - self._last_discovery_time < DISCOVERY_COOLDOWN_SECONDS:
+            return None
+
+        logger.info("Iniciando discovery mDNS buscando '%s'...", name)
+        try:
+            chromecasts, browser = pychromecast.get_chromecasts(timeout=8)
+            pychromecast.discovery.stop_discovery(browser)
+            self._last_discovery_time = time.monotonic()
+        except Exception as exc:
+            logger.error("Discovery mDNS falló: %s", exc)
+            self._last_discovery_time = time.monotonic()
+            return None
+
+        for cc in chromecasts:
+            if cc.name.lower() == name.lower():
+                return (cc.cast_info.host, cc.cast_info.port)
+
+        logger.info("Discovery no encontró '%s' en la red", name)
+        return None
+
+    def _persist_host_update(self, state: CastState) -> None:
+        try:
+            with open(self.config_path) as f:
+                cfg = json.load(f)
+            for entry in cfg["chromecasts"]:
+                if entry["id"] == state.id:
+                    entry["host"] = state.host
+                    entry["port"] = state.port
+                    break
+            with open(self.config_path, "w") as f:
+                json.dump(cfg, f, indent=2)
+                f.write("\n")
+            logger.info("config.json actualizado: %s -> %s:%d", state.name, state.host, state.port)
+        except Exception as exc:
+            logger.error("Error actualizando config.json para %s: %s", state.name, exc)
+
     async def _recover_state(self, state: CastState, reason: Optional[str]) -> None:
         should_restore_display = state.display_launched or state.rotating or state.current_url is not None
         should_resume_rotation = state.rotating
@@ -331,8 +371,21 @@ class CastManager:
 
         connected = await asyncio.to_thread(self._connect_state, state)
         if not connected:
-            state.reconnect_attempts = max(state.reconnect_attempts, 1)
-            return
+            result = await asyncio.to_thread(self._discover_by_name, state.name)
+            if result:
+                new_host, new_port = result
+                if new_host != state.host or new_port != state.port:
+                    logger.info(
+                        "Descubierto %s en nueva IP %s:%d (era %s:%d)",
+                        state.name, new_host, new_port, state.host, state.port,
+                    )
+                    state.host = new_host
+                    state.port = new_port
+                    await asyncio.to_thread(self._persist_host_update, state)
+                    connected = await asyncio.to_thread(self._connect_state, state)
+            if not connected:
+                state.reconnect_attempts = max(state.reconnect_attempts, 1)
+                return
 
         if should_restore_display:
             self._sync_current_link_state(state)
