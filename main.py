@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from urllib.parse import quote, unquote, urlparse
 
@@ -17,7 +18,7 @@ from screenshot_assets import screenshot_asset_key, screenshot_asset_revision
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PROXY_BASE = "http://172.25.19.179:8000"
+PROXY_BASE = os.environ.get("PROXY_BASE", "http://172.25.19.179:8000")
 PRTG_HOST = "172.25.0.22"
 PRTG_ORIGIN = f"https://{PRTG_HOST}"
 

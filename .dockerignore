@@ -1,0 +1,11 @@
+.venv/
+.git/
+.claude/
+__pycache__/
+*.pyc
+*.pyo
+static/screenshots/*.gif
+static/screenshots/*.png
+docs/
+tests/
+.env

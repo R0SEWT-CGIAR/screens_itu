@@ -51,7 +51,36 @@ pychromecast requires a `CastInfo` with at least one `HostServiceInfo(host, port
 
 ### Configuration
 
-`config.json` holds Chromecast devices (id, name, host, port, uuid), links (url, label), and default rotation interval. The `proxy_base` IP (`172.25.19.179`) is hardcoded in `main.py`.
+`config.json` holds Chromecast devices (id, name, host, port, uuid), links (url, label), and default rotation interval. `PROXY_BASE` se lee de la env var (fallback: `http://172.25.19.179:8000`).
+
+## Despliegue (TLDR)
+
+```bash
+# 1. Copiar repo a la maquina destino e instalar Docker
+# 2. Crear .env con la IP de la maquina
+echo 'PROXY_BASE=http://<TU_IP>:8000' > .env
+
+# 3. Ajustar config.json con los Chromecasts de la red
+
+# 4. Levantar
+docker compose up -d --build
+
+# 5. Verificar
+curl http://localhost:8000/api/status
+
+# 6. Parar
+docker compose down
+```
+
+**Horario 7:30-16:30 (L-V):**
+
+Linux (cron): `crontab -e`
+```
+30 7  * * 1-5  cd /ruta/quiosco && docker compose up -d
+30 16 * * 1-5  cd /ruta/quiosco && docker compose down
+```
+
+Windows: Task Scheduler con `scripts/start.bat` (7:30) y `scripts/stop.bat` (16:30).
 
 ## ADRs
 
