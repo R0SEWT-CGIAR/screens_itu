@@ -1,29 +1,69 @@
 # ADR-003: Enfoque hibrido para URLs internas vs externas
 
 ## Estado
-Aceptado
+Aceptado (actualizado)
 
 ## Contexto
-Tenemos dos tipos de URLs:
-- **Internas (172.25.0.22):** Cert SSL invalido, sin Cloudflare, sin X-Frame-Options
-- **Externas (cgiar.org, cipotato.org):** Cert valido, protegidas por Cloudflare, con X-Frame-Options: SAMEORIGIN
+El sistema debe mostrar en Chromecast tres escenarios reales:
 
-Inicialmente se intento un proxy universal para todas las URLs, pero las externas con Cloudflare devuelven 403 (challenge JS que requiere browser real).
+- **Internas PRTG (172.25.0.22):** certificado SSL invalido, requieren proxy local
+- **Externas proxyables:** pueden pasar por proxy sin romper contenido
+- **Externas no proxyables (Cloudflare/challenge):** no se pueden proxear de forma confiable
+
+Adicionalmente, se requiere evitar recargas continuas de DashCast para no mostrar pantallas de carga en cada rotacion.
 
 ## Alternativas consideradas
 
-1. **Proxy universal:** Proxear todo. Falla con Cloudflare (403 Forbidden, "Just a moment..." challenge).
-2. **Todo directo con DashCast force=True:** Funciona para externas, falla para internas (cert invalido).
-3. **Hibrido:** Internas via wrapper+proxy, externas directo con DashCast.
+1. **Proxy universal para todo**
+	 - Ventaja: una sola ruta de render
+	 - Problema: sitios con Cloudflare devuelven 403/challenge y no cargan bien
+
+2. **Cast directo URL por URL con DashCast**
+	 - Ventaja: flujo simple
+	 - Problema: rotacion con recargas de receiver, peor experiencia visual y sin control uniforme de layout
+
+3. **Enfoque hibrido con display page unica (decision actual)**
+	 - Una display page concentra iframes y screenshots
+	 - La rotacion solo cambia indice visible
 
 ## Decision
-Enfoque hibrido:
-- **URLs internas (172.25.0.22):** `_proxy_url()` las convierte a `http://servidor:8000/cast/view?url=...`. DashCast las carga con `force=False` (nuestra wrapper page no bloquea iframes). La wrapper page tiene viewport 1920x1080 y un iframe que carga via `/proxy/all`.
-- **URLs externas:** Se envian directo al Chromecast. DashCast las carga con `force=True` (bypass X-Frame-Options). Sin control de viewport.
+Se adopta un enfoque hibrido centrado en una **display page unica** cargada una sola vez por Chromecast.
+
+### Reglas de enrutamiento
+
+- **Internas PRTG (`172.25.0.22`)**
+	- Render en `iframe`
+	- Ruta: `/proxy/{path}`
+	- Proxy con bypass SSL, reescritura HTML/CSS e interceptor JS (ver ADR-002)
+
+- **Externas proxyables**
+	- Render en `iframe`
+	- Ruta: `/p/{origin_encoded}/{path}`
+
+- **Externas no proxyables**
+	- Render como `img` con GIF periodico
+	- Ruta de asset: `/static/screenshots/{asset}.gif`
+	- Seleccion segun `SCREENSHOT_SITES`
+
+### Rotacion
+
+- DashCast carga `GET /cast/display?cc_id=<id>` una sola vez
+- La display page consulta `GET /api/current/<id>` cada 2s
+- `CastManager._rotation_loop()` solo incrementa `current_index`
+- No se llama `load_url()` en cada salto de rotacion
 
 ## Consecuencias
-- (+) Ambos tipos de URL funcionan
-- (+) URLs internas tienen viewport controlado (1920x1080)
-- (-) URLs externas no tienen control de viewport — dependen del browser del Chromecast
-- (-) Logica condicional en `TimedDashCastController.load_url()` decide `force` segun si la URL es wrapper o no
-- (-) Si cipotato.org o cgiar.org cambian su proteccion Cloudflare, podrian dejar de funcionar
+
+- (+) Se soportan internas, externas proxyables y externas no proxyables en un solo flujo
+- (+) La rotacion es estable y sin recarga de receiver en cada cambio
+- (+) Se mantiene control de layout por resolucion/zoom dentro de la display page
+- (-) `SCREENSHOT_SITES` es una lista en codigo y requiere reinicio al cambiarla
+- (-) Las URLs en screenshot no son tiempo real continuo; dependen del ciclo de captura
+- (-) El sistema depende de que `PROXY_BASE` sea accesible desde la red del Chromecast
+
+## Notas de implementacion
+
+- El flujo legacy basado en wrapper `cast/view` y proxy universal `proxy/all` ya no es la implementacion vigente.
+- La implementacion actual se apoya en:
+	- `main.py`: `/cast/display`, `/api/current/{id}`, `/proxy/{path}`, `/p/{origin}/{path}`
+	- `cast_manager.py`: `launch_display()`, `_rotation_loop()`, watchdog y recuperacion
