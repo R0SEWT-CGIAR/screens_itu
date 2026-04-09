@@ -269,14 +269,14 @@
   slider.addEventListener('change', () => { sliderActive = false; });
 
   async function applyInterval() {
-    sliderActive = false;
     const seconds = parseFloat(slider.value);
     await fetch('/api/config/interval', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ seconds })
     });
-    fetchStatus();
+    await fetchStatus();
+    sliderActive = false;
   }
 
   fetchStatus();
