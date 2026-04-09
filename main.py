@@ -32,14 +32,23 @@ async def lifespan(app: FastAPI):
     proxy_client = httpx.AsyncClient(verify=False, timeout=30, follow_redirects=True)
     manager.connect()
     # Start screenshot task for unproxyable URLs
-    unproxyable_urls = [l["url"] for l in manager.links if _use_screenshot(l["url"])]
+    # Use first CC resolution as output size (all CCs typically share a screen res)
+    first_state = next(iter(manager.states.values()), None)
+    cast_w, cast_h = first_state.resolution if first_state else DEFAULT_RESOLUTION
+    unproxyable_links = [l for l in manager.links if _use_screenshot(l["url"])]
+    unproxyable_urls = [l["url"] for l in unproxyable_links]
+    viewport_map = {
+        l["url"]: (int(cast_w / l.get("zoom", 1.0)), int(cast_h / l.get("zoom", 1.0)))
+        for l in unproxyable_links
+    }
     with open("config.json") as f:
         _cfg = json.load(f)
     gif_duration = _cfg.get("screenshot_gif_duration_seconds", 60)
     screenshot_task = None
     if unproxyable_urls:
         screenshot_task = start_screenshot_task(
-            unproxyable_urls, interval_seconds=300, gif_duration_seconds=gif_duration
+            unproxyable_urls, interval_seconds=300, gif_duration_seconds=gif_duration,
+            viewport_map=viewport_map, output_size=(cast_w, cast_h),
         )
     watchdog_task = manager.start_watchdog_task(interval_seconds=WATCHDOG_INTERVAL_SECONDS)
     yield
@@ -125,6 +134,14 @@ async def set_interval(body: IntervalRequest):
 
 # URLs que no se pueden proxear (Cloudflare JS challenge)
 SCREENSHOT_SITES = {"cipotato.org", "www.cgiar.org", "cgiar.org"}
+DEFAULT_RESOLUTION = (1920, 1080)
+
+
+def _cc_resolution(cc_id: str) -> tuple[int, int]:
+    state = manager.states.get(cc_id)
+    if state and hasattr(state, "resolution") and state.resolution:
+        return state.resolution
+    return DEFAULT_RESOLUTION
 
 
 def _use_screenshot(url: str) -> bool:
@@ -170,33 +187,48 @@ def _iframe_src(url: str) -> str:
 
 @app.get("/cast/display")
 def cast_display(cc_id: str = "cc1"):
+    cast_w, cast_h = _cc_resolution(cc_id)
     links = manager.links
     iframes_html = ""
     for i, link in enumerate(links):
         url = link["url"]
+        zoom = link.get("zoom", 1.0)
+        # Viewport del contenido: resolución del CC ajustada por zoom
+        vw = int(cast_w / zoom)
+        vh = int(cast_h / zoom)
+        # Scale para encajar en el cast
+        sx = cast_w / vw
+        sy = cast_h / vh
         if _use_screenshot(url):
             asset_key = screenshot_asset_key(url)
             iframes_html += (
                 f'  <img id="frame-{i}" data-asset-key="{asset_key}"'
-                f' class="frame screenshot-frame" style="display:none; width:1920px; height:1080px; object-fit:cover">\n'
+                f' class="frame screenshot-frame" style="display:none;'
+                f' width:{vw}px; height:{vh}px;'
+                f' transform:scale({sx},{sy}); transform-origin:top left;'
+                f' object-fit:fill">\n'
             )
         else:
             src = _iframe_src(url)
-            iframes_html += f'  <iframe id="frame-{i}" src="{src}" class="frame" style="display:none"></iframe>\n'
+            iframes_html += (
+                f'  <iframe id="frame-{i}" src="{src}" class="frame"'
+                f' style="display:none; width:{vw}px; height:{vh}px;'
+                f' transform:scale({sx},{sy}); transform-origin:top left;"></iframe>\n'
+            )
 
     html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=1920,initial-scale=1">
+<meta name="viewport" content="width={cast_w},initial-scale=1">
 <style>
   * {{ margin: 0; padding: 0; }}
-  html, body {{ width: 1920px; height: 1080px; overflow: hidden; background: #000; }}
+  html, body {{ width: {cast_w}px; height: {cast_h}px; overflow: hidden; background: #000; }}
   .frame {{
     position: absolute;
     top: 0; left: 0;
-    width: 1920px;
-    height: 1080px;
+    width: {cast_w}px;
+    height: {cast_h}px;
     border: none;
   }}
 </style>
@@ -273,18 +305,19 @@ def cast_display(cc_id: str = "cc1"):
 
 @app.get("/cast/startup-check")
 def cast_startup_check(cc_id: str = "cc1"):
+    cast_w, cast_h = _cc_resolution(cc_id)
     links = manager.links
     if not links:
         return HTMLResponse(
-            content="""<!DOCTYPE html>
+            content=f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=1920,initial-scale=1">
+<meta name="viewport" content="width={cast_w},initial-scale=1">
 <style>
-  html, body {
-    width: 1920px;
-    height: 1080px;
+  html, body {{
+    width: {cast_w}px;
+    height: {cast_h}px;
     margin: 0;
     display: flex;
     align-items: center;
@@ -292,7 +325,7 @@ def cast_startup_check(cc_id: str = "cc1"):
     background: #000;
     color: #fff;
     font-family: system-ui, sans-serif;
-  }
+  }}
 </style>
 </head>
 <body>No hay paginas configuradas para la comprobacion</body>
@@ -304,6 +337,11 @@ def cast_startup_check(cc_id: str = "cc1"):
     urls = []
     for i, link in enumerate(links):
         url = link["url"]
+        zoom = link.get("zoom", 1.0)
+        vw = int(cast_w / zoom)
+        vh = int(cast_h / zoom)
+        sx = cast_w / vw
+        sy = cast_h / vh
         if _use_screenshot(url):
             asset_key = screenshot_asset_key(url)
             asset_revision = screenshot_asset_revision(asset_key)
@@ -311,11 +349,18 @@ def cast_startup_check(cc_id: str = "cc1"):
             src = f"/static/screenshots/{asset_key}.gif?v={asset_version}"
             frames_html += (
                 f'  <img id="startup-frame-{i}" src="{src}"'
-                f' class="frame" style="display:none; width:1920px; height:1080px; object-fit:cover">\n'
+                f' class="frame" style="display:none;'
+                f' width:{vw}px; height:{vh}px;'
+                f' transform:scale({sx},{sy}); transform-origin:top left;'
+                f' object-fit:fill">\n'
             )
         else:
             src = _iframe_src(url)
-            frames_html += f'  <iframe id="startup-frame-{i}" src="{src}" class="frame" style="display:none"></iframe>\n'
+            frames_html += (
+                f'  <iframe id="startup-frame-{i}" src="{src}" class="frame"'
+                f' style="display:none; width:{vw}px; height:{vh}px;'
+                f' transform:scale({sx},{sy}); transform-origin:top left;"></iframe>\n'
+            )
         labels.append(link["label"])
         urls.append(url)
 
@@ -323,15 +368,15 @@ def cast_startup_check(cc_id: str = "cc1"):
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=1920,initial-scale=1">
+<meta name="viewport" content="width={cast_w},initial-scale=1">
 <style>
   * {{ margin: 0; padding: 0; }}
-  html, body {{ width: 1920px; height: 1080px; overflow: hidden; background: #000; }}
+  html, body {{ width: {cast_w}px; height: {cast_h}px; overflow: hidden; background: #000; }}
   .frame {{
     position: absolute;
     top: 0; left: 0;
-    width: 1920px;
-    height: 1080px;
+    width: {cast_w}px;
+    height: {cast_h}px;
     border: none;
   }}
   .debug-overlay {{

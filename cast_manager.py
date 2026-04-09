@@ -62,6 +62,7 @@ class CastState:
     last_seen_at: Optional[str] = None
     last_error: Optional[str] = None
     reconnect_attempts: int = 0
+    resolution: tuple[int, int] = (1920, 1080)
     task: Optional[asyncio.Task] = field(default=None, repr=False)
     _chromecast: Optional[object] = field(default=None, repr=False)
     _dashcast: Optional[DashCastController] = field(default=None, repr=False)
@@ -79,12 +80,14 @@ class CastManager:
         self._last_discovery_time: float = 0.0
         self.states: dict[str, CastState] = {}
         for cc in cfg["chromecasts"]:
+            res = cc.get("resolution", [1920, 1080])
             self.states[cc["id"]] = CastState(
                 id=cc["id"],
                 name=cc["name"],
                 host=cc["host"],
                 port=cc.get("port", 8009),
                 uuid=cc.get("uuid", ""),
+                resolution=(int(res[0]), int(res[1])),
             )
 
     @staticmethod
