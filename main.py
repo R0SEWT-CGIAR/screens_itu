@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 import os
+import socket
 from contextlib import asynccontextmanager
+from typing import Optional
 from urllib.parse import quote, unquote, urlparse
 
 import httpx
@@ -18,9 +20,68 @@ from screenshot_assets import screenshot_asset_key, screenshot_asset_revision
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-PROXY_BASE = os.environ.get("PROXY_BASE", "http://172.25.19.179:8000")
+PROXY_FALLBACK = "http://172.25.19.179:8000"
 PRTG_HOST = "172.25.0.22"
 PRTG_ORIGIN = f"https://{PRTG_HOST}"
+
+
+def _local_ip_for(target: str) -> Optional[str]:
+    """Local IPv4 the kernel would use to reach `target` (no packet sent)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((target, 1))
+        return s.getsockname()[0]
+    except Exception:
+        return None
+    finally:
+        s.close()
+
+
+def _detect_local_ip(prefix: str, sentinels: list[str]) -> Optional[str]:
+    """Return a local IPv4 starting with prefix, picking the interface that
+    routes to one of the given sentinels (typically Chromecast IPs)."""
+    for target in sentinels:
+        ip = _local_ip_for(target)
+        if ip and ip.startswith(prefix):
+            return ip
+    return None
+
+
+def _resolve_proxy_base() -> str:
+    env_value = os.environ.get("PROXY_BASE", "").strip()
+    if env_value:
+        logger.info("PROXY_BASE desde env: %s", env_value)
+        return env_value
+
+    try:
+        with open("config.json") as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+
+    subnet = cfg.get("proxy_auto_subnet")
+    if subnet:
+        sentinels = [cc["host"] for cc in cfg.get("chromecasts", []) if cc.get("host")]
+        # Last resort sentinel built from the prefix itself.
+        octets = subnet.rstrip(".").split(".")
+        while len(octets) < 4:
+            octets.append("1")
+        sentinels.append(".".join(octets[:4]))
+
+        detected = _detect_local_ip(subnet, sentinels)
+        if detected:
+            url = f"http://{detected}:8000"
+            logger.info("PROXY_BASE auto-detectado (%s): %s", subnet, url)
+            return url
+        logger.warning(
+            "Auto-detect IP no encontró interfaz con prefijo '%s'. Usando fallback %s",
+            subnet, PROXY_FALLBACK,
+        )
+
+    return PROXY_FALLBACK
+
+
+PROXY_BASE = _resolve_proxy_base()
 
 manager = CastManager(proxy_base=PROXY_BASE)
 proxy_client: httpx.AsyncClient | None = None

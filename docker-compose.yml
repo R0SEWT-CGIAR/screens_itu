@@ -3,7 +3,7 @@ services:
     build: .
     network_mode: host
     environment:
-      - PROXY_BASE=${PROXY_BASE:-http://172.25.19.179:8000}
+      - PROXY_BASE=${PROXY_BASE:-}
     volumes:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots

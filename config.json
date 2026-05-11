@@ -3,10 +3,13 @@
     {
       "id": "cc1",
       "name": "ITU_Chromecast 1",
-      "host": "172.25.19.70",
+      "host": "172.25.19.97",
       "port": 8009,
       "uuid": "add083f9-01dd-db70-7bea-a2bfb817c86e",
-      "resolution": [1280, 720]
+      "resolution": [
+        1280,
+        720
+      ]
     },
     {
       "id": "cc2",
@@ -14,7 +17,10 @@
       "host": "172.25.19.185",
       "port": 8009,
       "uuid": "99e15c34-34cb-5513-49b9-fced4223e981",
-      "resolution": [1280, 720]
+      "resolution": [
+        1280,
+        720
+      ]
     }
   ],
   "links": [
@@ -26,6 +32,12 @@
     {
       "url": "https://172.25.0.22/public/mapshow.htm?id=5530&mapid=E47F7755-5A46-42A0-B0FD-37695AE45EED",
       "label": "Estado de la red",
+      "zoom": 1.0
+    },
+
+    {
+      "url": "https://stats.uptimerobot.com/26r4CjSckG",
+      "label": "Uptime Robot",
       "zoom": 1.0
     },
     {
@@ -50,5 +62,6 @@
     }
   ],
   "default_interval_seconds": 5,
-  "screenshot_gif_duration_seconds": 15
+  "screenshot_gif_duration_seconds": 15,
+  "proxy_auto_subnet": "172.25."
 }
