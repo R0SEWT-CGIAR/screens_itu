@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "quiosco",
+  "project_id": "c083d910-8ff7-48c5-9d6e-5e2a055aab25"
+}
