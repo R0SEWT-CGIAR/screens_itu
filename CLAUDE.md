@@ -1,87 +1,157 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working in this repository.
 
 ## Project Overview
 
-Quiosco is a Python web app that rotates web pages (PRTG dashboards, institutional landing pages) on Chromecasts. It uses FastAPI for the backend/API, pychromecast with DashCast for Chromecast control, and a static HTML/JS frontend.
+Quiosco is a Python 3.13 FastAPI service that rotates web pages on Chromecasts from a central control point. It renders internal PRTG dashboards, institutional pages, and selected external status pages through a hybrid iframe/proxy/screenshot approach.
+
+Core runtime files:
+
+- `main.py`: FastAPI app, API routes, display pages, proxy routes, and static UI routes.
+- `cast_manager.py`: Chromecast connection state, DashCast launch, rotation state, and watchdog behavior.
+- `screenshot.py` / `screenshot_assets.py`: Playwright/Pillow screenshot capture and stable asset naming.
+- `static/index.html`: browser control UI.
+- `config.json`: runtime Chromecast and link configuration.
+
+## Source of Truth
+
+Use these sources in order:
+
+1. `CLAUDE.md` for Claude Code behavior.
+2. `AGENTS.md` for general repository agent behavior.
+3. `.beads/` for current tasks, status, decisions, and work tracking.
+4. `docs/adr/` and `docs/manual-operativo.md` for stable architecture and operations.
+5. `README.md` for human-facing project usage.
+
+Do not create extra planning markdown files unless explicitly requested. Use Beads for durable task tracking.
+
+## Beads Workflow
+
+This repository uses **bd (Beads)** as the shared ticketing system.
+
+Start substantial sessions with:
+
+```bash
+git status
+bd prime
+bd ready
+```
+
+For assigned or selected work:
+
+```bash
+bd show <id>
+bd update <id> --claim
+```
+
+For new discovered work:
+
+```bash
+bd create "Title" --type task --priority 2
+```
+
+Before finishing:
+
+```bash
+uv run python -m unittest discover -s tests -v
+bd close <id>
+bd dolt status
+bd dolt push
+git status
+```
+
+Rules:
+
+- Use `bd` for all durable task tracking.
+- Use `bd remember` for persistent project knowledge; do not create `MEMORY.md`.
+- Do not close a Beads issue without committed deliverables or an explicit handoff note.
+- If a validation gate is not applicable, document why in the Beads issue or final handoff.
+
+## Repository Strategy
+
+Current branch strategy:
+
+- `main`: stable deployable branch.
+- `feature/<short-name>`: short-lived branch for focused work.
+
+Completed work follows:
+
+```text
+feature/* -> main
+```
+
+Do not introduce a `dev` branch unless the team explicitly changes the workflow. Do not use branches as permanent project folders.
+
+The worktree may contain unrelated user changes. Do not revert or overwrite them unless explicitly requested.
 
 ## Commands
 
 ```bash
-uv sync                                                    # Install dependencies
-uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload  # Run dev server
-uv run python discover.py                                  # Discover Chromecasts on LAN
-```
-
-No tests or linter configured.
-
-## Architecture
-
-### Casting flow (display page approach)
-
-DashCast loads ONE page (`/cast/display?cc_id=cc1`) that contains all links as pre-loaded iframes. Rotation toggles CSS visibility — no DashCast reload, no loading screen.
-
-The display page polls `/api/current/{cc_id}` every 2s to know which iframe to show. `CastManager._rotation_loop()` only increments `current_index` — it does NOT call `load_url()` on each rotation.
-
-### PRTG proxy (critical — three layers needed)
-
-Internal URLs (172.25.0.22) need a proxy because PRTG has an invalid SSL cert. The proxy at `/proxy/{path}` does three things that are ALL required:
-
-1. **SSL bypass:** httpx fetches from PRTG with `verify=False`, serves via HTTP
-2. **HTML URL rewriting:** Rewrites absolute paths in HTML attributes (`href="/css/..."` → `href="/proxy/css/..."`, same for `src`, `action`). Relative paths are NOT touched — they resolve correctly relative to the proxy URL.
-3. **JS fetch/XHR interceptor:** Injected script that overrides `fetch()` and `XMLHttpRequest.open()` to rewrite `/path` → `/proxy/path`. Without this, PRTG's runtime API calls fail with "Lost connection to PRTG server".
-
-**What does NOT work for PRTG** (documented in ADR-002):
-- `<base href="/proxy/">` — only affects relative URLs in HTML, not absolute paths or JS requests
-- Proxy universal (`/proxy/all?url=...`) — breaks relative URL resolution
-
-### External URLs
-
-Sites behind Cloudflare (cipotato.org) can't be proxied (403 JS challenge). They load directly in iframes on the display page — may fail if the site sets `X-Frame-Options: SAMEORIGIN`.
-
-### Key classes
-
-- **`CastManager`** (`cast_manager.py`): Manages Chromecast connections, rotation state, and display page launch. `launch_display()` loads DashCast once; `_rotation_loop()` only updates `current_index`.
-- **`TimedDashCastController`** (`cast_manager.py`): Subclass of `DashCastController` with timing logs.
-
-### Chromecast connection
-
-pychromecast requires a `CastInfo` with at least one `HostServiceInfo(host, port)` in the `services` set. Without `HostServiceInfo`, `.wait()` times out silently. Host/port/uuid come from `config.json` (populated via `discover.py`).
-
-### Configuration
-
-`config.json` holds Chromecast devices (id, name, host, port, uuid), links (url, label), and default rotation interval. `PROXY_BASE` se lee de la env var (fallback: `http://172.25.19.179:8000`).
-
-## Despliegue (TLDR)
-
-```bash
-# 1. Copiar repo a la maquina destino e instalar Docker
-# 2. Crear .env con la IP de la maquina
-echo 'PROXY_BASE=http://<TU_IP>:8000' > .env
-
-# 3. Ajustar config.json con los Chromecasts de la red
-
-# 4. Levantar
-docker compose up -d --build
-
-# 5. Verificar
-curl http://localhost:8000/api/status
-
-# 6. Parar
+uv sync
+uv run playwright install chromium
+uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uv run python discover.py
+uv run python -m unittest discover -s tests -v
+PROXY_BASE=http://<server-ip>:8000 docker compose up -d --build
 docker compose down
 ```
 
-**Horario 7:30-16:30 (L-V):**
+Testing uses the standard-library `unittest` suite in `tests/`. No linter is currently configured.
 
-Linux (cron): `crontab -e`
-```
-30 7  * * 1-5  cd /ruta/quiosco && docker compose up -d
-30 16 * * 1-5  cd /ruta/quiosco && docker compose down
+## Architecture
+
+### Casting flow
+
+DashCast loads one display page:
+
+```text
+/cast/display?cc_id=<chromecast-id>
 ```
 
-Windows: Task Scheduler con `scripts/start.bat` (7:30) y `scripts/stop.bat` (16:30).
+That page contains all links as preloaded iframes or screenshot images. Rotation toggles CSS visibility, so DashCast does not reload on every step.
+
+The display page polls:
+
+```text
+/api/current/{cc_id}
+```
+
+`CastManager._rotation_loop()` updates `current_index`; it does not call `load_url()` on each rotation.
+
+### PRTG proxy (critical — three layers needed)
+
+Internal PRTG URLs use host `172.25.0.22` and need a proxy because PRTG has an invalid SSL certificate. The `/proxy/{path}` route must preserve all three behaviors:
+
+1. SSL bypass through `httpx` with `verify=False`.
+2. HTML URL rewriting for absolute `href`, `src`, and `action` paths.
+3. Injected JS `fetch()` and `XMLHttpRequest.open()` interception for runtime API calls.
+
+Do not replace this with only `<base href="/proxy/">` or a universal query-param proxy; ADR-002 explains why those approaches fail.
+
+### External URLs
+
+External proxyable URLs use `/p/{origin_encoded}/{path}`. Some Cloudflare or frame-restricted sites cannot be proxied reliably and use screenshot assets instead.
+
+The screenshot/proxy split is operationally sensitive. Changes to screenshot domains, generated GIF behavior, or proxy rewriting require focused tests and deployment notes.
+
+### Chromecast connection
+
+pychromecast requires a `CastInfo` with at least one `HostServiceInfo(host, port)` in the `services` set. Without `HostServiceInfo`, `.wait()` can time out silently.
+
+Host, port, UUID, resolution, and link data come from `config.json`.
+
+## Operational Notes
+
+`PROXY_BASE` must point to a URL reachable from the Chromecast network. If missing, the app uses its configured fallback, but production deployments should set it explicitly.
+
+The Copilot Studio / Power Automate / UptimeRobot docs in `docs/` are auxiliary external-integration material. They are not part of the core Chromecast runtime unless a Beads issue explicitly asks for implementation.
 
 ## ADRs
 
-Architecture Decision Records in `docs/adr/` document key decisions: DashCast usage, reverse proxy for SSL, hybrid internal/external strategy, and IP-based Chromecast connection.
+Architecture Decision Records in `docs/adr/` document key decisions:
+
+- DashCast for arbitrary URL casting.
+- Reverse proxy for internal SSL-invalid PRTG URLs.
+- Hybrid internal/external rendering strategy.
+- IP-based Chromecast connection.
