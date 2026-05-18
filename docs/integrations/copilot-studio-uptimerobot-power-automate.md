@@ -6,7 +6,7 @@ No se crea una API nueva en Quiosco. Power Automate consulta directamente el end
 
 Antes de implementar el flujo, usar como contrato base:
 
-- `docs/uptimerobot-data-contract.md`
+- `docs/integrations/uptimerobot-data-contract.md`
 
 ## Fuente de datos
 

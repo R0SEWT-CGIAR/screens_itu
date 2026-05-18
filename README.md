@@ -161,8 +161,8 @@ En `http://localhost:8000`:
 
 Para que un agente responda preguntas como `OCS esta caido?` usando el estado publico de UptimeRobot, ver:
 
-- `docs/uptimerobot-data-contract.md`
-- `docs/copilot-studio-uptimerobot-power-automate.md`
+- `docs/integrations/uptimerobot-data-contract.md`
+- `docs/integrations/copilot-studio-uptimerobot-power-automate.md`
 
 ### Detener
 
