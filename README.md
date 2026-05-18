@@ -129,7 +129,7 @@ Si no se define, el sistema usa fallback (`http://172.25.19.179:8000`). En entor
 
 Notas:
 
-- La lista `SCREENSHOT_SITES` vive en `main.py` (`cipotato.org`, `cgiar.org`, `www.cgiar.org`).
+- La lista `SCREENSHOT_SITES` vive en `main.py` (`cipotato.org`, `cgiar.org`, `www.cgiar.org`, `stats.uptimerobot.com`).
 - Cualquier cambio en `SCREENSHOT_SITES` requiere reiniciar la app.
 
 ## Operacion diaria

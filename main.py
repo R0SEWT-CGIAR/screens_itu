@@ -194,7 +194,7 @@ async def set_interval(body: IntervalRequest):
 # --- Display page para Chromecast ---
 
 # URLs que no se pueden proxear (Cloudflare JS challenge)
-SCREENSHOT_SITES = {"cipotato.org", "www.cgiar.org", "cgiar.org"}
+SCREENSHOT_SITES = {"cipotato.org", "www.cgiar.org", "cgiar.org", "stats.uptimerobot.com"}
 DEFAULT_RESOLUTION = (1920, 1080)
 
 

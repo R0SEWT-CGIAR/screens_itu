@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from io import BytesIO
 from pathlib import Path
 
@@ -13,6 +14,33 @@ from screenshot_assets import screenshot_asset_path
 logger = logging.getLogger(__name__)
 
 FRAME_INTERVAL = 2  # seconds between frames
+COOKIE_ACCEPT_PATTERNS = (
+    r"^(accept all cookies|accept all|allow all|agree and continue|i accept|i agree)$",
+    r"^(aceptar todas las cookies|aceptar todo|permitir todo|estoy de acuerdo)$",
+    r"^(accept|aceptar|agree)$",
+)
+
+
+async def accept_cookie_banner(page) -> bool:
+    """Best-effort dismissal for cookie banners before screenshots."""
+    for pattern in COOKIE_ACCEPT_PATTERNS:
+        text_match = re.compile(pattern, re.IGNORECASE)
+        candidates = (
+            page.get_by_role("button", name=text_match),
+            page.get_by_role("link", name=text_match),
+            page.locator("button, a").filter(has_text=text_match),
+        )
+        for locator in candidates:
+            try:
+                if await locator.count() == 0:
+                    continue
+                await locator.first.click(timeout=1500)
+                await page.wait_for_timeout(500)
+                logger.info("Cookie banner accepted with pattern: %s", pattern)
+                return True
+            except Exception:
+                continue
+    return False
 
 
 async def take_gif(
@@ -31,6 +59,7 @@ async def take_gif(
             browser = await p.chromium.launch()
             page = await browser.new_page(viewport={"width": viewport_width, "height": viewport_height})
             await page.goto(url, wait_until="networkidle", timeout=30000)
+            await accept_cookie_banner(page)
 
             target_size = (output_width, output_height)
             frames: list[Image.Image] = []

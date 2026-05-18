@@ -34,11 +34,10 @@
       "label": "Estado de la red",
       "zoom": 1.0
     },
-
     {
       "url": "https://stats.uptimerobot.com/26r4CjSckG",
       "label": "Uptime Robot",
-      "zoom": 1.0
+      "zoom": 0.6
     },
     {
       "url": "https://172.25.0.22/public/mapshow.htm?id=5380&mapid=E0352718-B093-461A-8A3F-0AF536DCF406",

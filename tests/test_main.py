@@ -87,6 +87,11 @@ class MainRouteTests(unittest.TestCase):
         self.assertIsNone(payload["asset_key"])
         self.assertIsNone(payload["asset_revision"])
 
+    def test_uptime_robot_uses_screenshot_mode(self):
+        url = "https://stats.uptimerobot.com/26r4CjSckG"
+
+        self.assertTrue(main._use_screenshot(url))
+
     def test_cast_display_uses_dynamic_screenshot_assets(self):
         response = main.cast_display("cc1")
         html = response.body.decode("utf-8")
@@ -94,7 +99,7 @@ class MainRouteTests(unittest.TestCase):
 
         self.assertIn(f'data-asset-key="{screenshot_key}"', html)
         self.assertIn("refreshScreenshotFrame", html)
-        self.assertIn("/static/screenshots/${assetKey}.gif?v=${version}", html)
+        self.assertIn('"/static/screenshots/" + assetKey + ".gif?v=" + version', html)
         self.assertIn('<iframe id="frame-1"', html)
 
     def test_cast_startup_check_uses_all_configured_links(self):
