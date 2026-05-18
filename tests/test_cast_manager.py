@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from cast_manager import CastManager, DASHCAST_APP_ID
+from quiosco.cast_manager import CastManager, DASHCAST_APP_ID
 
 
 class FakeChromecast:
@@ -142,7 +142,7 @@ class CastManagerWatchdogTests(unittest.IsolatedAsyncioTestCase):
         self.manager._connect_state = fake_connect
         self.manager.launch_display = fake_launch
 
-        with patch("cast_manager.asyncio.create_task", side_effect=fake_create_task):
+        with patch("quiosco.cast_manager.asyncio.create_task", side_effect=fake_create_task):
             await self.manager.ensure_device("cc1")
 
         self.assertEqual(self.state.current_index, 1)

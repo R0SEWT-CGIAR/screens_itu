@@ -5,6 +5,7 @@ import time
 import uuid as uuid_mod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import pychromecast
@@ -13,6 +14,8 @@ from pychromecast.generated.cast_channel_pb2 import CastMessage
 from pychromecast.models import CastInfo, HostServiceInfo
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.json"
 
 DASHCAST_APP_ID = "84912283"
 WATCHDOG_INTERVAL_SECONDS = 15.0
@@ -69,7 +72,9 @@ class CastState:
 
 
 class CastManager:
-    def __init__(self, config_path: str = "config.json", proxy_base: str = ""):
+    def __init__(self, config_path: Optional[str] = None, proxy_base: str = ""):
+        if config_path is None:
+            config_path = str(_DEFAULT_CONFIG_PATH)
         with open(config_path) as f:
             cfg = json.load(f)
 

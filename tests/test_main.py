@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import main
-import screenshot_assets
-from cast_manager import CastManager
+from quiosco import main
+from quiosco import screenshot_assets
+from quiosco.cast_manager import CastManager
 
 
 def write_config(config_path: Path) -> None:

@@ -9,7 +9,7 @@ from pathlib import Path
 from PIL import Image
 from playwright.async_api import async_playwright
 
-from screenshot_assets import screenshot_asset_path
+from .screenshot_assets import screenshot_asset_path
 
 logger = logging.getLogger(__name__)
 

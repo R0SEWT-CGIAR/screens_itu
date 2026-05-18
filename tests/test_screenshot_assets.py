@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import screenshot_assets
+from quiosco import screenshot_assets
 
 
 class ScreenshotAssetsTests(unittest.TestCase):

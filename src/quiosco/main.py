@@ -13,12 +13,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
-from screenshot import start_screenshot_task
-from screenshot_assets import screenshot_asset_key, screenshot_asset_revision
+from pathlib import Path
+
+from .cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
+from .screenshot import start_screenshot_task
+from .screenshot_assets import screenshot_asset_key, screenshot_asset_revision
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.json"
 
 PROXY_FALLBACK = "http://172.25.19.179:8000"
 PRTG_HOST = "172.25.0.22"
@@ -54,7 +58,7 @@ def _resolve_proxy_base() -> str:
         return env_value
 
     try:
-        with open("config.json") as f:
+        with open(_CONFIG_PATH) as f:
             cfg = json.load(f)
     except Exception:
         cfg = {}
@@ -83,7 +87,7 @@ def _resolve_proxy_base() -> str:
 
 PROXY_BASE = _resolve_proxy_base()
 
-manager = CastManager(proxy_base=PROXY_BASE)
+manager = CastManager(config_path=str(_CONFIG_PATH), proxy_base=PROXY_BASE)
 proxy_client: httpx.AsyncClient | None = None
 
 
@@ -102,7 +106,7 @@ async def lifespan(app: FastAPI):
         l["url"]: (int(cast_w / l.get("zoom", 1.0)), int(cast_h / l.get("zoom", 1.0)))
         for l in unproxyable_links
     }
-    with open("config.json") as f:
+    with open(_CONFIG_PATH) as f:
         _cfg = json.load(f)
     gif_duration = _cfg.get("screenshot_gif_duration_seconds", 60)
     screenshot_task = None
