@@ -65,5 +65,5 @@ Se adopta un enfoque hibrido centrado en una **display page unica** cargada una 
 
 - El flujo legacy basado en wrapper `cast/view` y proxy universal `proxy/all` ya no es la implementacion vigente.
 - La implementacion actual se apoya en:
-	- `main.py`: `/cast/display`, `/api/current/{id}`, `/proxy/{path}`, `/p/{origin}/{path}`
-	- `cast_manager.py`: `launch_display()`, `_rotation_loop()`, watchdog y recuperacion
+	- `src/quiosco/main.py`: `/cast/display`, `/api/current/{id}`, `/proxy/{path}`, `/p/{origin}/{path}`
+	- `src/quiosco/cast_manager.py`: `launch_display()`, `_rotation_loop()`, watchdog y recuperacion

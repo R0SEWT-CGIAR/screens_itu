@@ -12,7 +12,7 @@ uv sync
 uv run playwright install chromium
 
 # 2) Descubrir Chromecasts de la red
-uv run python discover.py
+uv run quiosco-discover
 
 # 3) Editar config.json con host/port/uuid y URLs a mostrar
 
@@ -52,11 +52,11 @@ UI de control: `http://localhost:8000`
 ### 1. Descubrir Chromecasts
 
 ```bash
-uv run python discover.py
+uv run quiosco-discover
 cat chromecast.json
 ```
 
-`discover.py` genera `chromecast.json` con `name`, `host`, `port`, `uuid` por dispositivo.
+`quiosco-discover` (alias del módulo `quiosco.discover`) genera `chromecast.json` con `name`, `host`, `port`, `uuid` por dispositivo.
 
 ### 2. Completar `config.json`
 
@@ -129,7 +129,7 @@ Si no se define, el sistema usa fallback (`http://172.25.19.179:8000`). En entor
 
 Notas:
 
-- La lista `SCREENSHOT_SITES` vive en `main.py` (`cipotato.org`, `cgiar.org`, `www.cgiar.org`, `stats.uptimerobot.com`).
+- La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py` (`cipotato.org`, `cgiar.org`, `www.cgiar.org`, `stats.uptimerobot.com`).
 - Cualquier cambio en `SCREENSHOT_SITES` requiere reiniciar la app.
 
 ## Operacion diaria

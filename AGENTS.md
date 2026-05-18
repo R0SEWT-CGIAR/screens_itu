@@ -4,13 +4,14 @@
 
 Quiosco is a Python 3.13 FastAPI service for controlling Chromecast dashboard rotation.
 
-Core application code lives at the repository root:
+Core application code lives under `src/quiosco/`:
 
-- `main.py` exposes the API, proxy routes, display pages, and static UI routes.
-- `cast_manager.py` manages Chromecast connection state and rotation.
-- `screenshot.py` and `screenshot_assets.py` handle screenshot-based rendering for pages that cannot be proxied.
+- `src/quiosco/main.py` exposes the API, proxy routes, display pages, and static UI routes.
+- `src/quiosco/cast_manager.py` manages Chromecast connection state and rotation.
+- `src/quiosco/screenshot.py` and `src/quiosco/screenshot_assets.py` handle screenshot-based rendering for pages that cannot be proxied.
+- `src/quiosco/discover.py` is the network discovery CLI (also exposed as the `quiosco-discover` entry point).
 - `static/index.html` is the browser UI.
-- `docs/` contains operational docs and ADRs.
+- `docs/` contains operational docs and ADRs (`docs/integrations/` for external-integration material).
 - `scripts/` contains startup helpers.
 - `tests/` contains the standard-library `unittest` suite.
 
@@ -83,8 +84,8 @@ Rules:
 ```bash
 uv sync
 uv run playwright install chromium
-uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-uv run python discover.py
+uv run uvicorn quiosco.main:app --host 0.0.0.0 --port 8000 --reload
+uv run quiosco-discover
 uv run python -m unittest discover -s tests -v
 PROXY_BASE=http://<server-ip>:8000 docker compose up -d --build
 docker compose down
