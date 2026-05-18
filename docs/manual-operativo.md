@@ -165,6 +165,8 @@ Escalar al equipo de desarrollo cuando:
 ## 10. Referencias
 
 - `README.md`
+- `docs/uptimerobot-data-contract.md`
+- `docs/copilot-studio-uptimerobot-power-automate.md`
 - `docs/adr/001-dashcast-para-casting-de-urls.md`
 - `docs/adr/002-proxy-reverso-para-urls-internas.md`
 - `docs/adr/003-enfoque-hibrido-internas-vs-externas.md`

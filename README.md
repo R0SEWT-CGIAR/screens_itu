@@ -157,6 +157,13 @@ En `http://localhost:8000`:
 - Castear una URL puntual por dispositivo
 - Ejecutar `Debug interno` (`/cast/startup-check`) para validar carga de todas las paginas
 
+### Consulta desde Copilot Studio
+
+Para que un agente responda preguntas como `OCS esta caido?` usando el estado publico de UptimeRobot, ver:
+
+- `docs/uptimerobot-data-contract.md`
+- `docs/copilot-studio-uptimerobot-power-automate.md`
+
 ### Detener
 
 ```bash
