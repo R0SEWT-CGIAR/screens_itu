@@ -1,9 +1,12 @@
 .venv/
 .git/
+.beads/
 .claude/
 __pycache__/
 *.pyc
 *.pyo
+config.json
+chromecast.json
 static/screenshots/*.gif
 static/screenshots/*.png
 docs/
