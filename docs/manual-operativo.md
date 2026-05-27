@@ -1,127 +1,256 @@
 # Manual operativo de Quiosco
 
-Guia de operacion para personal TI y soporte del Centro Internacional de la Papa.
+Guia de instalacion, despliegue, operacion y troubleshooting para personal TI e infraestructura.
 
-Este manual complementa el README con procedimientos de turno, verificacion operativa y atencion de incidentes frecuentes.
+Este documento es la referencia operativa principal. El README queda como entrada rapida y mapa de navegacion.
 
-## 1. Alcance
+## Guia de instalacion
 
-Incluye:
+### Objetivo
 
-- Arranque y parada del servicio
-- Verificacion de estado de Chromecasts y paginas
-- Respuesta inicial ante incidentes operativos
-- Criterios de escalamiento tecnico
+Preparar una copia funcional de Quiosco con dependencias, navegador de screenshots, Chromecasts descubiertos y `config.json` listo para despliegue.
 
-No incluye:
+### Prerrequisitos
 
-- Cambios de codigo
-- Reingenieria de arquitectura
+Software:
 
-## 2. Requisitos operativos
+- Python 3.13+
+- `uv`
+- Docker y Docker Compose para operacion
+- Acceso de terminal al servidor donde correra Quiosco
 
-### 2.1 Requisitos tecnicos
+Red:
 
-- Docker y Docker Compose instalados en el servidor
-- Archivo `config.json` actualizado con Chromecasts y links vigentes
-- Variable `PROXY_BASE` definida con IP/host alcanzable desde Chromecasts
-- Acceso de red a:
-  - Chromecasts (TCP 8009)
-  - PRTG interno (`172.25.0.22:443`) para paneles internos
+- El servidor debe alcanzar los Chromecasts por TCP `8009`.
+- El servidor debe alcanzar PRTG interno en `172.25.0.22:443` para tableros internos.
+- Los Chromecasts deben poder abrir la URL definida en `PROXY_BASE`.
+- El discovery por mDNS puede estar bloqueado en redes corporativas; la operacion normal usa IP directa desde `config.json`.
 
-### 2.2 Archivos de referencia
-
-- `config.json`
-- `docker-compose.yml`
-- `scripts/start.sh`, `scripts/stop.sh`
-- `scripts/start.bat`, `scripts/stop.bat`
-
-## 3. Inicio de turno
-
-### 3.1 Arranque del servicio
-
-Linux:
+### 1. Instalar dependencias locales
 
 ```bash
-cd /ruta/quiosco
-docker compose up -d --build
+uv sync
+uv run playwright install chromium
 ```
 
-Windows (PowerShell o CMD):
+Docker instala Chromium dentro de la imagen con `playwright install --with-deps chromium`. La instalacion local es necesaria para desarrollo, pruebas manuales y generacion local de screenshots.
 
-```bat
-cd /d C:\ruta\quiosco
-docker compose up -d --build
+### 2. Descubrir Chromecasts
+
+```bash
+uv run quiosco-discover
+cat chromecast.json
 ```
 
-### 3.2 Verificacion inicial (obligatoria)
+`quiosco-discover` genera `chromecast.json` con `name`, `host`, `port` y `uuid` por dispositivo encontrado.
 
-1. Verificar estado global:
+Si discovery no encuentra dispositivos, validar primero conectividad de red, VLAN, mDNS y acceso TCP `8009`. Para operacion estable se recomienda copiar la IP directa al `config.json`.
+
+### 3. Completar `config.json`
+
+Copiar al menos `host`, `port` y `uuid` de cada Chromecast descubierto.
+
+Ejemplo minimo:
+
+```json
+{
+  "chromecasts": [
+    {
+      "id": "cc1",
+      "name": "ITU_Chromecast 1",
+      "host": "172.25.19.70",
+      "port": 8009,
+      "uuid": "add083f9-01dd-db70-7bea-a2bfb817c86e",
+      "resolution": [1280, 720]
+    }
+  ],
+  "links": [
+    {
+      "url": "https://172.25.0.22/public/mapshow.htm?id=5254&mapid=...",
+      "label": "Servicios activos",
+      "zoom": 1.0
+    },
+    {
+      "url": "https://cipotato.org/",
+      "label": "CIP landing",
+      "zoom": 0.9
+    }
+  ],
+  "default_interval_seconds": 5,
+  "screenshot_gif_duration_seconds": 15
+}
+```
+
+Campos principales:
+
+| Campo | Requerido | Default | Uso |
+| --- | --- | --- | --- |
+| `chromecasts[].id` | Si | - | Identificador operativo (`cc1`, `cc2`) |
+| `chromecasts[].name` | Si | - | Nombre visible en UI |
+| `chromecasts[].host` | Si | - | IP del Chromecast |
+| `chromecasts[].port` | No | `8009` | Puerto de control |
+| `chromecasts[].uuid` | No | generado si falta | Identidad del dispositivo |
+| `chromecasts[].resolution` | No | `[1920, 1080]` | Resolucion de salida |
+| `links[].url` | Si | - | URL a mostrar |
+| `links[].label` | Si | - | Etiqueta en UI |
+| `links[].zoom` | No | `1.0` | Escala visual por pagina |
+| `default_interval_seconds` | Si | - | Intervalo de rotacion, minimo 5s |
+| `screenshot_gif_duration_seconds` | No | `60` | Duracion del GIF por URL screenshot |
+
+### 4. Verificar instalacion local
+
+```bash
+uv run uvicorn quiosco.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+En otra terminal:
 
 ```bash
 curl http://localhost:8000/api/status
 ```
 
-2. Abrir UI:
+Abrir la UI:
 
-- `http://<IP_SERVIDOR>:8000`
+```text
+http://localhost:8000
+```
 
+## Guia de despliegue
+
+### Objetivo
+
+Ejecutar Quiosco como servicio operativo con Docker Compose y una URL base alcanzable por los Chromecasts.
+
+### Variable operativa obligatoria
+
+`PROXY_BASE` define la URL que DashCast abre en cada Chromecast:
+
+```bash
+PROXY_BASE=http://<IP_DEL_SERVIDOR>:8000
+```
+
+Usar una IP o DNS que sea alcanzable desde la red de los Chromecasts. No usar `localhost` para despliegues reales porque el Chromecast resolveria `localhost` contra si mismo.
+
+Si `PROXY_BASE` no se define, la app usa un fallback interno. En produccion debe declararse explicitamente para evitar despliegues dependientes de una IP accidental.
+
+### Opcion A: Docker Compose directo
+
+```bash
+PROXY_BASE=http://<IP_DEL_SERVIDOR>:8000 docker compose up -d --build
+```
+
+Verificar:
+
+```bash
+docker compose logs -f quiosco
+curl http://localhost:8000/api/status
+```
+
+Detener:
+
+```bash
+docker compose down
+```
+
+### Opcion B: Scripts operativos
+
+Linux:
+
+```bash
+scripts/start.sh
+scripts/stop.sh
+```
+
+Windows:
+
+```bat
+scripts\start.bat
+scripts\stop.bat
+```
+
+Los scripts ejecutan `docker compose up -d --build` y `docker compose down` desde la raiz del repositorio. Definir `PROXY_BASE` en el entorno antes de iniciar el script.
+
+### Opcion C: Cron en Linux
+
+Editar crontab:
+
+```bash
+crontab -e
+```
+
+Ejemplo L-V:
+
+```cron
+30 7  * * 1-5  cd /ruta/quiosco && PROXY_BASE=http://<IP_DEL_SERVIDOR>:8000 docker compose up -d --build >> /var/log/quiosco_start.log 2>&1
+30 16 * * 1-5  cd /ruta/quiosco && docker compose down >> /var/log/quiosco_stop.log 2>&1
+```
+
+### Opcion D: Task Scheduler en Windows
+
+Crear dos tareas:
+
+- 07:30: ejecutar `scripts/start.bat`
+- 16:30: ejecutar `scripts/stop.bat`
+
+Definir `PROXY_BASE` como variable de entorno del sistema o envolver el script de arranque con la asignacion equivalente.
+
+### Checklist posterior al despliegue
+
+1. Abrir `http://<IP_DEL_SERVIDOR>:8000`.
+2. Verificar `GET /api/status`.
 3. Confirmar por Chromecast:
+   - `connected = true`
+   - `display_ready = true` despues del arranque
+   - `last_error` vacio o `null`
+4. Ejecutar `Debug interno` desde la UI.
+5. Confirmar que las paginas avanzan y no quedan en blanco.
 
-- `connected = true`
-- `display_ready = true` despues del arranque
-- `last_error` vacio o `null`
+## Operacion diaria
 
-4. Ejecutar validacion visual:
+### Arranque de turno
 
-- Boton `Debug interno` en la UI
-- Validar que la secuencia avance por todas las paginas
-- Revisar estados de carga: `Cargada`, `Sin respuesta`, `Error`
+```bash
+cd /ruta/quiosco
+PROXY_BASE=http://<IP_DEL_SERVIDOR>:8000 docker compose up -d --build
+```
 
-## 4. Operacion durante el turno
+Verificar estado:
 
-### 4.1 Acciones operativas en UI
+```bash
+curl http://localhost:8000/api/status
+```
 
-- Iniciar rotacion por pantalla
-- Detener rotacion por pantalla
-- Ajustar intervalo global de rotacion
-- Castear URL puntual por pantalla
+Abrir UI:
 
-### 4.2 Criterios de monitoreo continuo
+```text
+http://<IP_DEL_SERVIDOR>:8000
+```
+
+### Acciones desde la UI
+
+- Iniciar rotacion por pantalla.
+- Detener rotacion por pantalla.
+- Ajustar intervalo global de rotacion.
+- Castear una URL puntual por pantalla.
+- Ejecutar `Debug interno` (`/cast/startup-check`) para validar carga de todas las paginas.
+
+### Monitoreo durante el turno
 
 Revisar periodicamente:
 
-- Dispositivos desconectados
-- `reconnect_attempts` en aumento
-- Mensajes de `last_error`
-- Paginas en blanco o sin actualizacion
+- Dispositivos desconectados.
+- `display_ready=false`.
+- `reconnect_attempts` en aumento.
+- Mensajes de `last_error`.
+- Paginas en blanco o sin actualizacion.
 
-Comando de logs recomendado:
+Logs:
 
 ```bash
 docker compose logs -f quiosco
 ```
 
-## 5. Matriz de incidentes
-
-| Sintoma | Causa probable | Accion inmediata | Escalar cuando |
-| --- | --- | --- | --- |
-| Chromecast desconectado | Host/puerto incorrecto o red caida | Re-ejecutar `discover.py`, actualizar `config.json`, verificar conectividad | No reconecta tras 2 ciclos de watchdog (~30s) |
-| `display_ready=false` sostenido | DashCast no activo o `PROXY_BASE` inaccesible | Verificar `PROXY_BASE`, abrir `/cast/display?cc_id=cc1`, revisar logs | Persiste luego de reinicio de servicio |
-| Dashboard PRTG en blanco | Falla de acceso a `172.25.0.22` o proxy | Ejecutar `Debug interno`, validar alcance a PRTG desde servidor | PRTG responde en red pero no renderiza |
-| Sitio externo no carga | Restricciones `X-Frame-Options`/Cloudflare | Verificar si cae en modo screenshot; evaluar reemplazo de URL | El sitio es critico y no existe alternativa |
-| GIF de screenshot no cambia | Falla de captura Playwright o timeout | Revisar logs, comprobar Chromium instalado y recursos del host | Falla continua en varios ciclos de captura |
-
-## 6. Cambios que requieren reinicio
-
-Reiniciar servicio (`docker compose down` + `docker compose up -d --build`) cuando cambie alguno de estos elementos:
-
-- `config.json`
-- `PROXY_BASE`
-- Lista `SCREENSHOT_SITES` en `main.py`
-- Dependencias de captura (Playwright/Chromium)
-
-## 7. Cierre de turno
+### Cierre de turno
 
 1. Confirmar estado final en UI y API.
 2. Si corresponde apagar servicio:
@@ -131,38 +260,126 @@ cd /ruta/quiosco
 docker compose down
 ```
 
-3. Registrar incidencias del turno con:
+3. Registrar incidencias con hora, pantalla afectada, URL implicada, accion aplicada y resultado.
 
-- hora
-- pantalla afectada
-- URL implicada
-- accion aplicada
-- resultado
+## Troubleshooting
 
-## 8. Operacion programada
+### Matriz de incidentes
 
-### 8.1 Linux (cron)
+| Sintoma | Causa probable | Accion inmediata | Escalar cuando |
+| --- | --- | --- | --- |
+| Chromecast aparece desconectado | IP/puerto incorrecto o red no accesible | Re-ejecutar `uv run quiosco-discover`, validar `config.json`, revisar TCP `8009` | No reconecta tras 2 ciclos de watchdog (~30s) |
+| `display_ready=false` sostenido | DashCast no quedo activo o `PROXY_BASE` no es alcanzable | Verificar `PROXY_BASE`, abrir `/cast/display?cc_id=cc1`, revisar logs | Persiste luego de reiniciar el servicio |
+| Dashboard PRTG en blanco | Falla de acceso a `172.25.0.22` o proxy | Ejecutar `Debug interno`, validar alcance a PRTG desde servidor | PRTG responde en red pero no renderiza via Quiosco |
+| Sitio externo no carga en iframe | Restricciones `X-Frame-Options`, Cloudflare o CSP | Confirmar si esta en modo screenshot; evaluar reemplazo de URL | El sitio es critico y no existe alternativa |
+| GIF de screenshot no cambia | Falla de captura Playwright, timeout o Chromium ausente | Revisar logs, comprobar `uv run playwright install chromium` local o imagen Docker actualizada | Falla continua en varios ciclos de captura |
+| Rotacion no avanza | Intervalo invalido, estado detenido o error de current index | Revisar UI, `GET /api/status` y `GET /api/current/<id>` | El indice queda inconsistente tras reinicio |
 
-```cron
-30 7  * * 1-5  cd /ruta/quiosco && docker compose up -d --build >> /var/log/quiosco_start.log 2>&1
-30 16 * * 1-5  cd /ruta/quiosco && docker compose down >> /var/log/quiosco_stop.log 2>&1
+### Comandos utiles
+
+Estado global:
+
+```bash
+curl http://localhost:8000/api/status
 ```
 
-### 8.2 Windows (Task Scheduler)
+Estado de pagina actual por Chromecast:
 
-- 07:30: ejecutar `scripts/start.bat`
-- 16:30: ejecutar `scripts/stop.bat`
+```bash
+curl http://localhost:8000/api/current/cc1
+```
 
-## 9. Escalamiento tecnico
+Validacion visual:
+
+```text
+http://localhost:8000/cast/startup-check
+```
+
+Logs:
+
+```bash
+docker compose logs -f quiosco
+```
+
+### Criterios de escalamiento tecnico
 
 Escalar al equipo de desarrollo cuando:
 
-- Hay regresion reproducible en rutas `/proxy` o `/p`
-- Watchdog no recupera un dispositivo luego de reinicio del servicio
-- Existen errores de rotacion con `current_index` inconsistente
-- Se requiere incorporar nuevos dominios en estrategia screenshot/proxy
+- Hay regresion reproducible en rutas `/proxy` o `/p`.
+- Watchdog no recupera un dispositivo luego de reiniciar el servicio.
+- Existen errores de rotacion con `current_index` inconsistente.
+- Se requiere incorporar nuevos dominios en estrategia screenshot/proxy.
+- Un cambio de configuracion afecta pantallas en produccion y no existe rollback claro.
 
-## 10. Referencias
+## Referencia tecnica
+
+### Modos de renderizado
+
+| Tipo de URL | Deteccion | Modo de render | Ruta efectiva |
+| --- | --- | --- | --- |
+| Interna PRTG | Host `172.25.0.22` | `iframe` | `/proxy/{path}` |
+| Externa proxyable | URL fuera de PRTG y fuera de lista screenshot | `iframe` | `/p/{origin_encoded}/{path}` |
+| Externa no proxyable | Host en `SCREENSHOT_SITES` | `img` con GIF | `/static/screenshots/{asset}.gif` |
+
+La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py`. Cualquier cambio requiere reiniciar la app.
+
+### Flujo de casting
+
+1. DashCast carga `GET /cast/display?cc_id=<id>`.
+2. La display page contiene todos los `iframe` o `img` pre-cargados.
+3. JavaScript consulta `GET /api/current/<id>` cada 2 segundos.
+4. La rotacion actualiza `current_index`; no recarga DashCast en cada cambio.
+
+### Recuperacion automatica
+
+- Watchdog asincrono cada 15s (`WATCHDOG_INTERVAL_SECONDS`).
+- Verifica socket, handshake y receiver activo.
+- Si detecta degradacion, reconecta y relanza display page.
+- Si habia rotacion activa, la restablece manteniendo `current_index`.
+
+### Proxy PRTG
+
+El proxy interno requiere tres capas:
+
+1. Bypass SSL con `httpx` y `verify=False`.
+2. Reescritura HTML/CSS de `href`, `src`, `action` y `url(...)` hacia `/proxy/...`.
+3. Interceptor JS para reescribir `fetch()` y `XMLHttpRequest.open()` en runtime.
+
+Sin la capa 3, PRTG pierde llamadas dinamicas y aparecen errores de conexion en pagina.
+
+### API resumida
+
+| Metodo | Ruta | Uso |
+| --- | --- | --- |
+| `GET` | `/api/status` | Estado global |
+| `GET` | `/api/current/{id}` | URL/indice actual por Chromecast |
+| `POST` | `/api/chromecasts/{id}/start` | Iniciar rotacion |
+| `POST` | `/api/chromecasts/{id}/stop` | Detener rotacion |
+| `POST` | `/api/chromecasts/{id}/cast` | Castear URL puntual |
+| `PUT` | `/api/config/interval` | Cambiar intervalo global |
+| `GET` | `/cast/display?cc_id=...` | Display page usada por DashCast |
+| `GET` | `/cast/startup-check` | Validacion visual de URLs |
+| `GET/POST/PUT` | `/proxy/{path}` | Proxy interno a PRTG |
+| `GET/POST/PUT` | `/p/{origin}/{path}` | Proxy para externas proxyables |
+
+### Cambios que requieren reinicio
+
+Reiniciar servicio (`docker compose down` + `docker compose up -d --build`) cuando cambie alguno de estos elementos:
+
+- `config.json`
+- `PROXY_BASE`
+- Lista `SCREENSHOT_SITES`
+- Dependencias de captura Playwright/Chromium
+
+### Pruebas de desarrollo
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+La suite actual cubre generacion de display page, metadatos de screenshot assets y comportamiento principal de watchdog. No cubre completamente proxy end-to-end ni casting con hardware real.
+
+### Referencias
 
 - `README.md`
 - `docs/integrations/uptimerobot-data-contract.md`
