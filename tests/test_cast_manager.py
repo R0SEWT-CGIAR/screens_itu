@@ -1,11 +1,12 @@
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from quiosco.cast_manager import CastManager, DASHCAST_APP_ID
+from quiosco.cast_manager import CastManager, DASHCAST_APP_ID, DASHCAST_LAUNCH_GRACE_SECONDS
 
 
 class FakeChromecast:
@@ -95,6 +96,9 @@ class CastManagerWatchdogTests(unittest.IsolatedAsyncioTestCase):
     async def test_watchdog_relaunches_when_dashcast_is_not_active(self):
         self.state.connected = True
         self.state.display_launched = True
+        self.state.last_display_launch_monotonic = (
+            time.monotonic() - DASHCAST_LAUNCH_GRACE_SECONDS - 1
+        )
         self.state._chromecast = FakeChromecast(app_id="OTHER_APP", is_connected=True)
         self.state._dashcast = object()
 
@@ -110,6 +114,51 @@ class CastManagerWatchdogTests(unittest.IsolatedAsyncioTestCase):
         await self.manager.ensure_device("cc1")
 
         self.assertEqual(launch_calls, ["cc1"])
+
+    async def test_watchdog_waits_for_dashcast_launch_grace_period(self):
+        self.state.connected = True
+        self.state.rotating = True
+        self.state.display_launched = True
+        self.state.last_display_launch_monotonic = time.monotonic()
+        self.state._chromecast = FakeChromecast(app_id=None, is_connected=True)
+        self.state._dashcast = object()
+
+        launch_calls = []
+
+        def fake_launch(cc_id):
+            launch_calls.append(cc_id)
+            return True
+
+        self.manager.launch_display = fake_launch
+
+        await self.manager.ensure_device("cc1")
+
+        self.assertEqual(launch_calls, [])
+        self.assertFalse(self.state.display_ready)
+        self.assertIsNone(self.state.last_error)
+
+    async def test_watchdog_does_not_relaunch_when_rotation_is_stopped(self):
+        self.state.connected = True
+        self.state.rotating = False
+        self.state.display_launched = True
+        self.state.last_display_launch_monotonic = (
+            time.monotonic() - DASHCAST_LAUNCH_GRACE_SECONDS - 1
+        )
+        self.state._chromecast = FakeChromecast(app_id="CC1AD845", is_connected=True)
+        self.state._dashcast = object()
+
+        launch_calls = []
+
+        def fake_launch(cc_id):
+            launch_calls.append(cc_id)
+            return True
+
+        self.manager.launch_display = fake_launch
+
+        await self.manager.ensure_device("cc1")
+
+        self.assertEqual(launch_calls, [])
+        self.assertFalse(self.state.display_ready)
 
     async def test_watchdog_preserves_index_when_resuming_rotation(self):
         self.state.connected = True

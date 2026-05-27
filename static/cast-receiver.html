@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Quiosco Cast Receiver</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    iframe {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      border: none;
+    }
+    #status {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      color: #888;
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      text-align: center;
+      padding: 8px;
+      background: rgba(0,0,0,0.6);
+      opacity: 0;
+      transition: opacity 1s;
+    }
+    #status.visible { opacity: 1; }
+  </style>
+</head>
+<body>
+  <iframe id="display" src="about:blank"></iframe>
+  <div id="status"></div>
+
+  <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <script>
+    // Namespace must match pychromecast's DashCastController APP_NAMESPACE
+    var NAMESPACE = 'urn:x-cast:com.google.cast.ctp.dashcast';
+
+    var context = cast.framework.CastReceiverContext.getInstance();
+    var statusEl = document.getElementById('status');
+    var displayEl = document.getElementById('display');
+    var statusTimer = null;
+
+    function showStatus(msg) {
+      statusEl.textContent = msg;
+      statusEl.classList.add('visible');
+      if (statusTimer) clearTimeout(statusTimer);
+      statusTimer = setTimeout(function() {
+        statusEl.classList.remove('visible');
+      }, 4000);
+    }
+
+    context.addCustomMessageListener(NAMESPACE, function(event) {
+      var msg = event.data;
+      if (!msg || !msg.url) return;
+      if (msg.force) {
+        showStatus('Cargando: ' + msg.url);
+        window.location.href = msg.url;
+      } else {
+        showStatus('Cargando: ' + msg.url);
+        displayEl.src = msg.url;
+      }
+    });
+
+    var options = new cast.framework.CastReceiverOptions();
+    options.maxInactivity = 3600;
+    options.disableIdleTimeout = true;
+    context.start(options);
+
+    showStatus('Quiosco listo');
+  </script>
+</body>
+</html>

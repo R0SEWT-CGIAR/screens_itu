@@ -20,6 +20,7 @@ _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.json"
 DASHCAST_APP_ID = "84912283"
 WATCHDOG_INTERVAL_SECONDS = 15.0
 DISCOVERY_COOLDOWN_SECONDS = 60.0
+DASHCAST_LAUNCH_GRACE_SECONDS = 45.0
 
 
 class TimedDashCastController(DashCastController):
@@ -37,6 +38,16 @@ class TimedDashCastController(DashCastController):
 
     def launch(self, *, callback_function=None, force_launch=False):
         # Siempre force_launch para poder relanzar tras cast directo
+        cc_name = self.cc_name
+        if callback_function is not None:
+            _orig = callback_function
+            def _logged(success: bool, response) -> None:
+                if success:
+                    logger.info("[%s] RECEIVER_STATUS recibido — enviando URL a DashCast", cc_name)
+                else:
+                    logger.warning("[%s] Fallo al lanzar DashCast: %s", cc_name, response)
+                _orig(success, response)
+            callback_function = _logged
         super().launch(callback_function=callback_function, force_launch=True)
 
     def receive_message(self, message: CastMessage, data: dict) -> bool:
@@ -66,6 +77,7 @@ class CastState:
     last_error: Optional[str] = None
     reconnect_attempts: int = 0
     resolution: tuple[int, int] = (1920, 1080)
+    last_display_launch_monotonic: Optional[float] = None
     task: Optional[asyncio.Task] = field(default=None, repr=False)
     _chromecast: Optional[object] = field(default=None, repr=False)
     _dashcast: Optional[DashCastController] = field(default=None, repr=False)
@@ -199,6 +211,7 @@ class CastManager:
 
         state.display_launched = True
         state.display_ready = state._chromecast.app_id == DASHCAST_APP_ID
+        state.last_display_launch_monotonic = time.monotonic()
         state.last_error = None
         return True
 
@@ -418,6 +431,17 @@ class CastManager:
 
         chromecast = state._chromecast
         if state.display_launched and chromecast and chromecast.app_id != DASHCAST_APP_ID:
+            if not state.rotating:
+                state.display_ready = False
+                return
+
+            if (
+                state.last_display_launch_monotonic is not None
+                and time.monotonic() - state.last_display_launch_monotonic < DASHCAST_LAUNCH_GRACE_SECONDS
+            ):
+                state.display_ready = False
+                return
+
             state.display_ready = False
             state.last_error = "DashCast no activo"
             logger.warning("[%s] Receiver degradado: app_id=%s", state.name, chromecast.app_id)
