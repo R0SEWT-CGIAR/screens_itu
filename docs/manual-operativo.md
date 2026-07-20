@@ -196,6 +196,36 @@ Crear dos tareas:
 
 Definir `PROXY_BASE` como variable de entorno del sistema o envolver el script de arranque con la asignacion equivalente.
 
+### Opcion E: Windows con imagen de Docker Hub (recomendada para Windows)
+
+No requiere clonar el repo ni buildear: usa la imagen publicada `cipotato/quiosco`.
+
+1. Instalar Docker Desktop y habilitar "Start Docker Desktop when you sign in".
+2. Crear una carpeta de despliegue (p.ej. `C:\quiosco\`) con:
+   - `docker-compose.windows.yml` (de este repo)
+   - `config.json` (IPs/UUIDs de los Chromecasts y links)
+   - `.env` con `PROXY_BASE=http://<IP_LAN_DE_LA_COMPU>:8000`
+3. Arrancar:
+
+```bat
+cd C:\quiosco
+docker compose -f docker-compose.windows.yml up -d
+```
+
+4. Permitir el puerto 8000 entrante en el Firewall de Windows si los Chromecasts no cargan la display page.
+
+Para actualizar a una nueva version de la imagen:
+
+```bat
+docker compose -f docker-compose.windows.yml pull
+docker compose -f docker-compose.windows.yml up -d
+```
+
+Limitaciones en Windows (Docker Desktop):
+
+- `network_mode: host` no existe; el compose de Windows mapea `8000:8000`.
+- El discovery mDNS no funciona desde el contenedor: si un Chromecast cambia de IP, actualizar `config.json` a mano y reiniciar (recomendado: reserva DHCP para los Chromecasts).
+
 ### Checklist posterior al despliegue
 
 1. Abrir `http://<IP_DEL_SERVIDOR>:8000`.
