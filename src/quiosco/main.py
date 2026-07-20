@@ -100,7 +100,12 @@ async def lifespan(app: FastAPI):
     # Use first CC resolution as output size (all CCs typically share a screen res)
     first_state = next(iter(manager.states.values()), None)
     cast_w, cast_h = first_state.resolution if first_state else DEFAULT_RESOLUTION
-    unproxyable_links = [l for l in manager.links if _use_screenshot(l["url"])]
+    # Capturamos GIFs de las unproxyables (se muestran como screenshot) y tambien
+    # de las internas PRTG: esas siguen renderizando como iframe, pero su GIF
+    # sirve de asset para el fallback via Default Media Receiver.
+    unproxyable_links = [
+        l for l in manager.links if _use_screenshot(l["url"]) or _is_internal_url(l["url"])
+    ]
     unproxyable_urls = [l["url"] for l in unproxyable_links]
     viewport_map = {
         l["url"]: (int(cast_w / l.get("zoom", 1.0)), int(cast_h / l.get("zoom", 1.0)))

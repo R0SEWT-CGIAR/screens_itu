@@ -140,7 +140,11 @@ The screenshot/proxy split is operationally sensitive. Changes to screenshot dom
 
 pychromecast requires a `CastInfo` with at least one `HostServiceInfo(host, port)` in the `services` set. Without `HostServiceInfo`, `.wait()` can time out silently.
 
-Host, port, UUID, resolution, and link data come from `config.json`.
+Host, port, UUID, resolution, and link data come from `config.json`. Hosts/ports rediscovered at runtime (DHCP changes) are persisted to `data/runtime-state.json` (gitignored, mounted volume), which overlays `config.json` at startup — never write discovered IPs back into `config.json`.
+
+### DashCast fallback
+
+If DashCast fails `FALLBACK_AFTER_FAILURES` consecutive watchdog checks after the launch grace period (e.g. `CAST_INIT_TIMEOUT`), `CastManager` enters fallback mode: rotation casts each link's screenshot GIF via the Default Media Receiver (`CC1AD845`) and retries DashCast every `FALLBACK_DASHCAST_RETRY_SECONDS`. Internal PRTG links are included in the GIF capture loop (with cert bypass) solely to have fallback assets; their normal render mode is still iframe.
 
 ## Operational Notes
 

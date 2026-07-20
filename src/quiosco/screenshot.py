@@ -57,7 +57,11 @@ async def take_gif(
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch()
-            page = await browser.new_page(viewport={"width": viewport_width, "height": viewport_height})
+            # ignore_https_errors: PRTG interno usa certificado invalido (ver ADR-002)
+            page = await browser.new_page(
+                viewport={"width": viewport_width, "height": viewport_height},
+                ignore_https_errors=True,
+            )
             await page.goto(url, wait_until="networkidle", timeout=30000)
             await accept_cookie_banner(page)
 

@@ -272,6 +272,7 @@ docker compose down
 | --- | --- | --- | --- |
 | Chromecast aparece desconectado | IP/puerto incorrecto o red no accesible | Re-ejecutar `uv run quiosco-discover`, validar `config.json`, revisar TCP `8009` | No reconecta tras 2 ciclos de watchdog (~30s) |
 | `display_ready=false` sostenido | DashCast no quedo activo o `PROXY_BASE` no es alcanzable | Verificar `PROXY_BASE`, abrir `/cast/display?cc_id=cc1`, revisar logs | Persiste luego de reiniciar el servicio |
+| `fallback_active=true` en `/api/status` | DashCast no lanza (p.ej. receiver caido o sin internet); pantallas muestran GIFs via Default Media Receiver | Nada urgente: es el modo degradado esperado; revisar logs para la causa del fallo de DashCast | Sigue en fallback por horas o los GIFs quedan congelados |
 | Dashboard PRTG en blanco | Falla de acceso a `172.25.0.22` o proxy | Ejecutar `Debug interno`, validar alcance a PRTG desde servidor | PRTG responde en red pero no renderiza via Quiosco |
 | Sitio externo no carga en iframe | Restricciones `X-Frame-Options`, Cloudflare o CSP | Confirmar si esta en modo screenshot; evaluar reemplazo de URL | El sitio es critico y no existe alternativa |
 | GIF de screenshot no cambia | Falla de captura Playwright, timeout o Chromium ausente | Revisar logs, comprobar `uv run playwright install chromium` local o imagen Docker actualizada | Falla continua en varios ciclos de captura |
@@ -336,8 +337,17 @@ La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py`. Cualquier cambio requ
 
 - Watchdog asincrono cada 15s (`WATCHDOG_INTERVAL_SECONDS`).
 - Verifica socket, handshake y receiver activo.
-- Si detecta degradacion, reconecta y relanza display page.
+- Si detecta degradacion, reconecta y relanza display page (con gracia de 45s tras cada lanzamiento de DashCast).
 - Si habia rotacion activa, la restablece manteniendo `current_index`.
+
+### Fallback a Default Media Receiver
+
+Cuando DashCast falla 3 veces seguidas tras la gracia (`FALLBACK_AFTER_FAILURES`, p.ej. `CAST_INIT_TIMEOUT` como en el incidente del 2026-05-18), el watchdog activa modo fallback:
+
+- La rotacion castea el GIF de screenshot del link actual con el Default Media Receiver (`CC1AD845`), que es el receiver oficial de Google y no depende del receiver de DashCast.
+- Para que el fallback cubra tambien los dashboards PRTG, el ciclo de captura de GIFs incluye las URLs internas (con bypass de certificado); esos GIFs solo se usan como asset de respaldo, el modo normal sigue siendo iframe.
+- Cada 5 min (`FALLBACK_DASHCAST_RETRY_SECONDS`) reintenta DashCast; al recuperarse sale solo del fallback.
+- `GET /api/status` expone `fallback_active` y `dashcast_failures` por Chromecast.
 
 ### Proxy PRTG
 

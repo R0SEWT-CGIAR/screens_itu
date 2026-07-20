@@ -13,6 +13,8 @@ from pychromecast.controllers.dashcast import DashCastController
 from pychromecast.generated.cast_channel_pb2 import CastMessage
 from pychromecast.models import CastInfo, HostServiceInfo
 
+from .screenshot_assets import screenshot_asset_path
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.json"
@@ -23,6 +25,8 @@ DASHCAST_APP_ID = "84912283"
 WATCHDOG_INTERVAL_SECONDS = 15.0
 DISCOVERY_COOLDOWN_SECONDS = 60.0
 DASHCAST_LAUNCH_GRACE_SECONDS = 45.0
+FALLBACK_AFTER_FAILURES = 3
+FALLBACK_DASHCAST_RETRY_SECONDS = 300.0
 
 
 class TimedDashCastController(DashCastController):
@@ -80,6 +84,9 @@ class CastState:
     reconnect_attempts: int = 0
     resolution: tuple[int, int] = (1920, 1080)
     last_display_launch_monotonic: Optional[float] = None
+    dashcast_failures: int = 0
+    fallback_active: bool = False
+    last_fallback_retry_monotonic: Optional[float] = None
     task: Optional[asyncio.Task] = field(default=None, repr=False)
     _chromecast: Optional[object] = field(default=None, repr=False)
     _dashcast: Optional[DashCastController] = field(default=None, repr=False)
@@ -256,6 +263,48 @@ class CastManager:
         state.last_error = None
         return True
 
+    def _fallback_media_url(self, state: CastState) -> Optional[str]:
+        """URL del GIF de screenshot del link actual, si existe el asset."""
+        link = self._current_link(state)
+        if not link:
+            return None
+        asset_path = screenshot_asset_path(link["url"])
+        try:
+            revision = asset_path.stat().st_mtime_ns
+        except FileNotFoundError:
+            return None
+        return f"{self.proxy_base}/static/screenshots/{asset_path.name}?v={revision}"
+
+    def cast_fallback_media(self, cc_id: str) -> bool:
+        """Castea el screenshot del link actual con el Default Media Receiver.
+
+        Modo degradado cuando DashCast no logra lanzar (p.ej. CAST_INIT_TIMEOUT):
+        el receiver oficial de Google si puede reproducir los GIF locales.
+        """
+        state = self.states.get(cc_id)
+        if not state or not state.connected or not state._chromecast:
+            return False
+
+        media_url = self._fallback_media_url(state)
+        if not media_url:
+            logger.warning(
+                "[%s] Fallback sin asset de screenshot para %s; se mantiene el anterior",
+                state.name, state.current_label,
+            )
+            return False
+
+        logger.info("[%s] Fallback: casteando %s", state.name, media_url)
+        try:
+            mc = state._chromecast.media_controller
+            mc.play_media(media_url, "image/gif")
+            mc.block_until_active(timeout=10)
+        except Exception as exc:
+            state.last_error = f"Fallback media fallo: {exc}"
+            logger.error("[%s] Error casteando fallback: %s", state.name, exc)
+            return False
+        state.last_error = None
+        return True
+
     def cast_url(self, cc_id: str, url: str, label: str = "") -> bool:
         """Cast manual: busca el link por URL y actualiza current_index."""
         state = self.states.get(cc_id)
@@ -290,7 +339,9 @@ class CastManager:
                     state.name,
                 )
 
-                if not state.display_launched:
+                if state.fallback_active:
+                    await asyncio.to_thread(self.cast_fallback_media, cc_id)
+                elif not state.display_launched:
                     self._relaunch_display(cc_id)
 
                 await asyncio.sleep(self.interval)
@@ -467,6 +518,29 @@ class CastManager:
         state.last_error = None
 
         chromecast = state._chromecast
+
+        if state.fallback_active:
+            if chromecast and chromecast.app_id == DASHCAST_APP_ID:
+                state.fallback_active = False
+                state.dashcast_failures = 0
+                state.display_ready = state.display_launched
+                logger.info("[%s] DashCast recuperado; saliendo de fallback", state.name)
+                return
+
+            state.display_ready = False
+            if not state.rotating:
+                return
+
+            now = time.monotonic()
+            if (
+                state.last_fallback_retry_monotonic is None
+                or now - state.last_fallback_retry_monotonic >= FALLBACK_DASHCAST_RETRY_SECONDS
+            ):
+                state.last_fallback_retry_monotonic = now
+                logger.info("[%s] Reintentando DashCast desde fallback", state.name)
+                self._relaunch_display(cc_id)
+            return
+
         if state.display_launched and chromecast and chromecast.app_id != DASHCAST_APP_ID:
             if not state.rotating:
                 state.display_ready = False
@@ -481,13 +555,30 @@ class CastManager:
 
             state.display_ready = False
             state.last_error = "DashCast no activo"
-            logger.warning("[%s] Receiver degradado: app_id=%s", state.name, chromecast.app_id)
+            state.dashcast_failures += 1
+
+            if state.dashcast_failures >= FALLBACK_AFTER_FAILURES:
+                state.fallback_active = True
+                state.last_fallback_retry_monotonic = time.monotonic()
+                logger.warning(
+                    "[%s] DashCast degradado %d veces seguidas; fallback a Default Media Receiver",
+                    state.name, state.dashcast_failures,
+                )
+                await asyncio.to_thread(self.cast_fallback_media, cc_id)
+                return
+
+            logger.warning(
+                "[%s] Receiver degradado (%d/%d): app_id=%s",
+                state.name, state.dashcast_failures, FALLBACK_AFTER_FAILURES, chromecast.app_id,
+            )
             self._relaunch_display(cc_id)
             return
 
         state.display_ready = bool(
             state.display_launched and chromecast and chromecast.app_id == DASHCAST_APP_ID
         )
+        if state.display_ready:
+            state.dashcast_failures = 0
 
     async def watchdog_loop(self, interval_seconds: float = WATCHDOG_INTERVAL_SECONDS) -> None:
         logger.info("Watchdog de Chromecast iniciado (intervalo=%ss)", interval_seconds)
@@ -523,6 +614,8 @@ class CastManager:
                     "current_index": s.current_index,
                     "display_launched": s.display_launched,
                     "display_ready": s.display_ready,
+                    "fallback_active": s.fallback_active,
+                    "dashcast_failures": s.dashcast_failures,
                     "last_seen_at": s.last_seen_at,
                     "last_error": s.last_error,
                     "reconnect_attempts": s.reconnect_attempts,
