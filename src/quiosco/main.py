@@ -271,8 +271,13 @@ def cast_display(cc_id: str = "cc1"):
         sy = cast_h / vh
         if _use_screenshot(url):
             asset_key = screenshot_asset_key(url)
+            # src precargado: el Chromecast descarga y decodifica el GIF al cargar
+            # la pagina, no en frio durante su slot de rotacion (quiosco-av6)
+            asset_revision = screenshot_asset_revision(asset_key)
+            asset_version = asset_revision if asset_revision is not None else "pending"
+            src = f"/static/screenshots/{asset_key}.gif?v={asset_version}"
             iframes_html += (
-                f'  <img id="frame-{i}" data-asset-key="{asset_key}"'
+                f'  <img id="frame-{i}" data-asset-key="{asset_key}" src="{src}"'
                 f' class="frame screenshot-frame" style="display:none;'
                 f' width:{vw}px; height:{vh}px;'
                 f' transform:scale({sx},{sy}); transform-origin:top left;'

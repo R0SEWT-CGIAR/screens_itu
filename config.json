@@ -61,6 +61,6 @@
     }
   ],
   "default_interval_seconds": 15,
-  "screenshot_gif_duration_seconds": 20,
+  "screenshot_gif_duration_seconds": 8,
   "proxy_auto_subnet": "172.25."
 }

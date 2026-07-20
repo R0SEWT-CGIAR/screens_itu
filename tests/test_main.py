@@ -98,6 +98,7 @@ class MainRouteTests(unittest.TestCase):
         screenshot_key = screenshot_assets.screenshot_asset_key(main.manager.links[0]["url"])
 
         self.assertIn(f'data-asset-key="{screenshot_key}"', html)
+        self.assertIn(f'src="/static/screenshots/{screenshot_key}.gif?v=', html)
         self.assertIn("refreshScreenshotFrame", html)
         self.assertIn('"/static/screenshots/" + assetKey + ".gif?v=" + version', html)
         self.assertIn('<iframe id="frame-1"', html)
