@@ -10,6 +10,7 @@ from quiosco.cast_manager import (
     CastManager,
     DASHCAST_APP_ID,
     DASHCAST_LAUNCH_GRACE_SECONDS,
+    DISPLAY_HEARTBEAT_TIMEOUT_SECONDS,
     FALLBACK_AFTER_FAILURES,
     FALLBACK_DASHCAST_RETRY_SECONDS,
 )
@@ -352,12 +353,26 @@ class CastManagerFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.state.fallback_active = True
         self.state.dashcast_failures = 5
         self.state._chromecast = FakeChromecast(app_id=DASHCAST_APP_ID, is_connected=True)
+        # La pagina cargo de verdad: heartbeat posterior al ultimo launch
+        self.state.last_heartbeat_monotonic = time.monotonic()
 
         await self.manager.ensure_device("cc1")
 
         self.assertFalse(self.state.fallback_active)
         self.assertEqual(self.state.dashcast_failures, 0)
         self.assertTrue(self.state.display_ready)
+
+    async def test_fallback_persists_if_dashcast_runs_but_page_never_loads(self):
+        self._degrade_state()
+        self.state.fallback_active = True
+        self.state.last_fallback_retry_monotonic = time.monotonic()
+        self.state._chromecast = FakeChromecast(app_id=DASHCAST_APP_ID, is_connected=True)
+        self.state.last_heartbeat_monotonic = None
+
+        await self.manager.ensure_device("cc1")
+
+        self.assertTrue(self.state.fallback_active)
+        self.assertFalse(self.state.display_ready)
 
     async def test_cast_fallback_media_without_asset_returns_false(self):
         self.state.connected = True
@@ -368,3 +383,87 @@ class CastManagerFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result)
         self.assertEqual(self.state._chromecast.media_controller.played, [])
+
+
+class CastManagerHeartbeatTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        config_path = Path(self.tmpdir.name) / "config.json"
+        write_config(config_path)
+        self.manager = CastManager(config_path=str(config_path), proxy_base="http://testserver")
+        self.state = self.manager.states["cc1"]
+        self.state.connected = True
+        self.state.rotating = True
+        self.state.display_launched = True
+        self.state.last_display_launch_monotonic = (
+            time.monotonic() - DASHCAST_LAUNCH_GRACE_SECONDS - 1
+        )
+        self.state._chromecast = FakeChromecast(app_id=DASHCAST_APP_ID, is_connected=True)
+        self.state._dashcast = object()
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_note_display_heartbeat_sets_timestamp(self):
+        self.assertIsNone(self.state.last_heartbeat_monotonic)
+        self.manager.note_display_heartbeat("cc1")
+        self.assertIsNotNone(self.state.last_heartbeat_monotonic)
+
+    async def test_stale_heartbeat_with_dashcast_active_relaunches(self):
+        # Escenario del 2026-07-20: DashCast corre (logo pegado) pero la
+        # display page nunca cargo -> sin heartbeat -> degradacion real.
+        self.state.last_heartbeat_monotonic = None
+
+        launch_calls = []
+
+        def fake_launch(cc_id):
+            launch_calls.append(cc_id)
+            self.state.display_launched = True
+            return True
+
+        self.manager.launch_display = fake_launch
+
+        await self.manager.ensure_device("cc1")
+
+        self.assertEqual(launch_calls, ["cc1"])
+        self.assertEqual(self.state.last_error, "Display page sin heartbeat")
+        self.assertEqual(self.state.dashcast_failures, 1)
+        self.assertFalse(self.state.display_ready)
+
+    async def test_old_heartbeat_counts_as_stale(self):
+        self.state.last_heartbeat_monotonic = (
+            time.monotonic() - DISPLAY_HEARTBEAT_TIMEOUT_SECONDS - 5
+        )
+
+        launch_calls = []
+        self.manager.launch_display = lambda cc_id: launch_calls.append(cc_id) or True
+
+        await self.manager.ensure_device("cc1")
+
+        self.assertEqual(launch_calls, ["cc1"])
+        self.assertFalse(self.state.display_ready)
+
+    async def test_fresh_heartbeat_marks_display_ready(self):
+        self.state.last_heartbeat_monotonic = time.monotonic()
+        self.state.dashcast_failures = 2
+
+        launch_calls = []
+        self.manager.launch_display = lambda cc_id: launch_calls.append(cc_id) or True
+
+        await self.manager.ensure_device("cc1")
+
+        self.assertEqual(launch_calls, [])
+        self.assertTrue(self.state.display_ready)
+        self.assertEqual(self.state.dashcast_failures, 0)
+
+    async def test_stale_heartbeat_ignored_when_not_rotating(self):
+        self.state.rotating = False
+        self.state.last_heartbeat_monotonic = None
+
+        launch_calls = []
+        self.manager.launch_display = lambda cc_id: launch_calls.append(cc_id) or True
+
+        await self.manager.ensure_device("cc1")
+
+        self.assertEqual(launch_calls, [])
+        self.assertFalse(self.state.display_ready)

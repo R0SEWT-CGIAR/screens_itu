@@ -337,8 +337,10 @@ La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py`. Cualquier cambio requ
 
 - Watchdog asincrono cada 15s (`WATCHDOG_INTERVAL_SECONDS`).
 - Verifica socket, handshake y receiver activo.
+- El poll de la display page a `/api/current` (cada 2s) actua como heartbeat: `display_ready=true` significa DashCast activo **y** pagina cargada latiendo. Si rota sin heartbeat por mas de 60s (`DISPLAY_HEARTBEAT_TIMEOUT_SECONDS`), cuenta como degradacion aunque DashCast corra (caso tipico: `PROXY_BASE` apunta a una IP muerta y el logo de DashCast queda pegado, incidente 2026-07-20).
 - Si detecta degradacion, reconecta y relanza display page (con gracia de 45s tras cada lanzamiento de DashCast).
 - Si habia rotacion activa, la restablece manteniendo `current_index`.
+- `GET /api/status` expone `heartbeat_age_seconds` por Chromecast (~2s en operacion sana; `null` si nunca cargo).
 
 ### Fallback a Default Media Receiver
 
@@ -346,7 +348,7 @@ Cuando DashCast falla 3 veces seguidas tras la gracia (`FALLBACK_AFTER_FAILURES`
 
 - La rotacion castea el GIF de screenshot del link actual con el Default Media Receiver (`CC1AD845`), que es el receiver oficial de Google y no depende del receiver de DashCast.
 - Para que el fallback cubra tambien los dashboards PRTG, el ciclo de captura de GIFs incluye las URLs internas (con bypass de certificado); esos GIFs solo se usan como asset de respaldo, el modo normal sigue siendo iframe.
-- Cada 5 min (`FALLBACK_DASHCAST_RETRY_SECONDS`) reintenta DashCast; al recuperarse sale solo del fallback.
+- Cada 5 min (`FALLBACK_DASHCAST_RETRY_SECONDS`) reintenta DashCast; sale del fallback solo cuando la display page vuelve a latir (heartbeat posterior al relanzamiento), no basta con que la app DashCast corra.
 - `GET /api/status` expone `fallback_active` y `dashcast_failures` por Chromecast.
 
 ### Proxy PRTG

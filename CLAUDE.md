@@ -146,6 +146,8 @@ Host, port, UUID, resolution, and link data come from `config.json`. Hosts/ports
 
 If DashCast fails `FALLBACK_AFTER_FAILURES` consecutive watchdog checks after the launch grace period (e.g. `CAST_INIT_TIMEOUT`), `CastManager` enters fallback mode: rotation casts each link's screenshot GIF via the Default Media Receiver (`CC1AD845`) and retries DashCast every `FALLBACK_DASHCAST_RETRY_SECONDS`. Internal PRTG links are included in the GIF capture loop (with cert bypass) solely to have fallback assets; their normal render mode is still iframe.
 
+The display page's 2s poll to `/api/current/{cc_id}` doubles as a heartbeat (`note_display_heartbeat`). `display_ready` requires DashCast running AND a fresh heartbeat — DashCast can be running with its logo stuck if the page URL is unreachable (e.g. stale `PROXY_BASE`). A rotating device with a stale heartbeat counts as degraded and follows the same relaunch→fallback path; fallback exits only on a heartbeat newer than the last relaunch.
+
 ## Operational Notes
 
 `PROXY_BASE` must point to a URL reachable from the Chromecast network. If missing, the app uses its configured fallback, but production deployments should set it explicitly.

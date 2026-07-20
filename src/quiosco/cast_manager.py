@@ -25,6 +25,7 @@ DASHCAST_APP_ID = "84912283"
 WATCHDOG_INTERVAL_SECONDS = 15.0
 DISCOVERY_COOLDOWN_SECONDS = 60.0
 DASHCAST_LAUNCH_GRACE_SECONDS = 45.0
+DISPLAY_HEARTBEAT_TIMEOUT_SECONDS = 60.0
 FALLBACK_AFTER_FAILURES = 3
 FALLBACK_DASHCAST_RETRY_SECONDS = 300.0
 
@@ -84,6 +85,7 @@ class CastState:
     reconnect_attempts: int = 0
     resolution: tuple[int, int] = (1920, 1080)
     last_display_launch_monotonic: Optional[float] = None
+    last_heartbeat_monotonic: Optional[float] = None
     dashcast_failures: int = 0
     fallback_active: bool = False
     last_fallback_retry_monotonic: Optional[float] = None
@@ -263,6 +265,12 @@ class CastManager:
         state.last_error = None
         return True
 
+    def note_display_heartbeat(self, cc_id: str) -> None:
+        """La display page hace poll a /api/current cada 2s; eso es el heartbeat."""
+        state = self.states.get(cc_id)
+        if state:
+            state.last_heartbeat_monotonic = time.monotonic()
+
     def _fallback_media_url(self, state: CastState) -> Optional[str]:
         """URL del GIF de screenshot del link actual, si existe el asset."""
         link = self._current_link(state)
@@ -340,7 +348,14 @@ class CastManager:
                 )
 
                 if state.fallback_active:
-                    await asyncio.to_thread(self.cast_fallback_media, cc_id)
+                    # No pisar un reintento de DashCast en curso con el media cast
+                    retrying_dashcast = (
+                        state.last_display_launch_monotonic is not None
+                        and time.monotonic() - state.last_display_launch_monotonic
+                        < DASHCAST_LAUNCH_GRACE_SECONDS
+                    )
+                    if not retrying_dashcast:
+                        await asyncio.to_thread(self.cast_fallback_media, cc_id)
                 elif not state.display_launched:
                     self._relaunch_display(cc_id)
 
@@ -518,20 +533,39 @@ class CastManager:
         state.last_error = None
 
         chromecast = state._chromecast
+        now = time.monotonic()
+        dashcast_running = bool(chromecast and chromecast.app_id == DASHCAST_APP_ID)
+        heartbeat_fresh = (
+            state.last_heartbeat_monotonic is not None
+            and now - state.last_heartbeat_monotonic <= DISPLAY_HEARTBEAT_TIMEOUT_SECONDS
+        )
+        in_launch_grace = (
+            state.last_display_launch_monotonic is not None
+            and now - state.last_display_launch_monotonic < DASHCAST_LAUNCH_GRACE_SECONDS
+        )
 
         if state.fallback_active:
-            if chromecast and chromecast.app_id == DASHCAST_APP_ID:
+            # Salir del fallback exige que la display page haya cargado de verdad
+            # (heartbeat posterior al ultimo launch), no solo que DashCast corra.
+            page_loaded = (
+                dashcast_running
+                and state.last_heartbeat_monotonic is not None
+                and state.last_display_launch_monotonic is not None
+                and state.last_heartbeat_monotonic >= state.last_display_launch_monotonic
+            )
+            if page_loaded:
                 state.fallback_active = False
                 state.dashcast_failures = 0
-                state.display_ready = state.display_launched
-                logger.info("[%s] DashCast recuperado; saliendo de fallback", state.name)
+                state.display_ready = True
+                logger.info(
+                    "[%s] DashCast y display page recuperados; saliendo de fallback", state.name
+                )
                 return
 
             state.display_ready = False
             if not state.rotating:
                 return
 
-            now = time.monotonic()
             if (
                 state.last_fallback_retry_monotonic is None
                 or now - state.last_fallback_retry_monotonic >= FALLBACK_DASHCAST_RETRY_SECONDS
@@ -541,41 +575,46 @@ class CastManager:
                 self._relaunch_display(cc_id)
             return
 
-        if state.display_launched and chromecast and chromecast.app_id != DASHCAST_APP_ID:
+        # Degradado si DashCast no corre, o si rota sin heartbeat de la display
+        # page (DashCast puede correr con el logo pegado si la pagina no carga).
+        display_degraded = state.display_launched and (
+            not dashcast_running or (state.rotating and not heartbeat_fresh)
+        )
+        if display_degraded:
             if not state.rotating:
                 state.display_ready = False
                 return
 
-            if (
-                state.last_display_launch_monotonic is not None
-                and time.monotonic() - state.last_display_launch_monotonic < DASHCAST_LAUNCH_GRACE_SECONDS
-            ):
+            if in_launch_grace:
                 state.display_ready = False
                 return
 
             state.display_ready = False
-            state.last_error = "DashCast no activo"
+            state.last_error = (
+                "DashCast no activo" if not dashcast_running else "Display page sin heartbeat"
+            )
             state.dashcast_failures += 1
 
             if state.dashcast_failures >= FALLBACK_AFTER_FAILURES:
                 state.fallback_active = True
-                state.last_fallback_retry_monotonic = time.monotonic()
+                state.last_fallback_retry_monotonic = now
                 logger.warning(
-                    "[%s] DashCast degradado %d veces seguidas; fallback a Default Media Receiver",
-                    state.name, state.dashcast_failures,
+                    "[%s] DashCast degradado %d veces seguidas (%s); fallback a Default Media Receiver",
+                    state.name, state.dashcast_failures, state.last_error,
                 )
                 await asyncio.to_thread(self.cast_fallback_media, cc_id)
                 return
 
             logger.warning(
-                "[%s] Receiver degradado (%d/%d): app_id=%s",
-                state.name, state.dashcast_failures, FALLBACK_AFTER_FAILURES, chromecast.app_id,
+                "[%s] Receiver degradado (%d/%d): app_id=%s heartbeat_fresh=%s",
+                state.name, state.dashcast_failures, FALLBACK_AFTER_FAILURES,
+                chromecast.app_id if chromecast else None, heartbeat_fresh,
             )
             self._relaunch_display(cc_id)
             return
 
         state.display_ready = bool(
-            state.display_launched and chromecast and chromecast.app_id == DASHCAST_APP_ID
+            state.display_launched and dashcast_running and heartbeat_fresh
         )
         if state.display_ready:
             state.dashcast_failures = 0
@@ -616,6 +655,11 @@ class CastManager:
                     "display_ready": s.display_ready,
                     "fallback_active": s.fallback_active,
                     "dashcast_failures": s.dashcast_failures,
+                    "heartbeat_age_seconds": (
+                        round(time.monotonic() - s.last_heartbeat_monotonic, 1)
+                        if s.last_heartbeat_monotonic is not None
+                        else None
+                    ),
                     "last_seen_at": s.last_seen_at,
                     "last_error": s.last_error,
                     "reconnect_attempts": s.reconnect_attempts,

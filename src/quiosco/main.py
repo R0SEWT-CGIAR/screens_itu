@@ -147,6 +147,9 @@ def current(cc_id: str):
     if not state:
         raise HTTPException(404)
 
+    # El poll de la display page (cada 2s) es el heartbeat del watchdog
+    manager.note_display_heartbeat(cc_id)
+
     link = manager._current_link(state)
     current_url = state.current_url or (link["url"] if link else None)
     render_mode = "screenshot" if current_url and _use_screenshot(current_url) else "iframe"
