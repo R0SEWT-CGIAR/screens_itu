@@ -50,6 +50,8 @@ Si discovery no encuentra dispositivos, validar primero conectividad de red, VLA
 
 Copiar al menos `host`, `port` y `uuid` de cada Chromecast descubierto.
 
+Nota: `config.json` es solo la semilla. Cuando el watchdog redescubre un Chromecast en otra IP (DHCP), guarda el host/puerto en `data/runtime-state.json` (no versionado, montado como volumen en Docker). Ese estado tiene prioridad sobre `config.json` al arrancar; para forzar la IP de `config.json`, borrar `data/runtime-state.json`.
+
 Ejemplo minimo:
 
 ```json

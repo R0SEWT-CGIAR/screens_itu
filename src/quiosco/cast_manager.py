@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.json"
 
+RUNTIME_STATE_FILENAME = "runtime-state.json"
+
 DASHCAST_APP_ID = "84912283"
 WATCHDOG_INTERVAL_SECONDS = 15.0
 DISCOVERY_COOLDOWN_SECONDS = 60.0
@@ -84,25 +86,38 @@ class CastState:
 
 
 class CastManager:
-    def __init__(self, config_path: Optional[str] = None, proxy_base: str = ""):
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        proxy_base: str = "",
+        runtime_state_path: Optional[str] = None,
+    ):
         if config_path is None:
             config_path = str(_DEFAULT_CONFIG_PATH)
         with open(config_path) as f:
             cfg = json.load(f)
 
         self.config_path: str = config_path
+        if runtime_state_path is None:
+            self.runtime_state_path = (
+                Path(config_path).resolve().parent / "data" / RUNTIME_STATE_FILENAME
+            )
+        else:
+            self.runtime_state_path = Path(runtime_state_path)
         self.links: list[dict] = cfg["links"]
         self.interval: float = cfg["default_interval_seconds"]
         self.proxy_base: str = proxy_base
         self._last_discovery_time: float = 0.0
         self.states: dict[str, CastState] = {}
+        overrides = self._load_runtime_state()
         for cc in cfg["chromecasts"]:
             res = cc.get("resolution", [1920, 1080])
+            override = overrides.get(cc["id"], {})
             self.states[cc["id"]] = CastState(
                 id=cc["id"],
                 name=cc["name"],
-                host=cc["host"],
-                port=cc.get("port", 8009),
+                host=override.get("host", cc["host"]),
+                port=override.get("port", cc.get("port", 8009)),
                 uuid=cc.get("uuid", ""),
                 resolution=(int(res[0]), int(res[1])),
             )
@@ -359,21 +374,43 @@ class CastManager:
         logger.info("Discovery no encontró '%s' en la red", name)
         return None
 
-    def _persist_host_update(self, state: CastState) -> None:
+    def _load_runtime_state(self) -> dict:
+        """Lee hosts/puertos descubiertos previamente (overlay sobre config.json)."""
         try:
-            with open(self.config_path) as f:
-                cfg = json.load(f)
-            for entry in cfg["chromecasts"]:
-                if entry["id"] == state.id:
-                    entry["host"] = state.host
-                    entry["port"] = state.port
-                    break
-            with open(self.config_path, "w") as f:
-                json.dump(cfg, f, indent=2)
-                f.write("\n")
-            logger.info("config.json actualizado: %s -> %s:%d", state.name, state.host, state.port)
+            with open(self.runtime_state_path) as f:
+                data = json.load(f)
+            chromecasts = data.get("chromecasts", {})
+            if isinstance(chromecasts, dict):
+                return chromecasts
+        except FileNotFoundError:
+            pass
         except Exception as exc:
-            logger.error("Error actualizando config.json para %s: %s", state.name, exc)
+            logger.warning(
+                "Estado runtime ilegible (%s), se ignora: %s", self.runtime_state_path, exc
+            )
+        return {}
+
+    def _persist_host_update(self, state: CastState) -> None:
+        """Guarda la IP/puerto descubiertos en el estado runtime, no en config.json."""
+        try:
+            try:
+                with open(self.runtime_state_path) as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    data = {}
+            except (FileNotFoundError, json.JSONDecodeError):
+                data = {}
+            chromecasts = data.setdefault("chromecasts", {})
+            chromecasts[state.id] = {"host": state.host, "port": state.port}
+            self.runtime_state_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.runtime_state_path, "w") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+            logger.info(
+                "runtime-state actualizado: %s -> %s:%d", state.name, state.host, state.port
+            )
+        except Exception as exc:
+            logger.error("Error actualizando estado runtime para %s: %s", state.name, exc)
 
     async def _recover_state(self, state: CastState, reason: Optional[str]) -> None:
         should_restore_display = state.display_launched or state.rotating or state.current_url is not None

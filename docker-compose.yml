@@ -7,4 +7,5 @@ services:
     volumes:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots
+      - ./data:/app/data
     restart: unless-stopped

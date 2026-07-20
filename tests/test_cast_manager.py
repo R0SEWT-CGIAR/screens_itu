@@ -50,6 +50,50 @@ def write_config(config_path: Path) -> None:
     )
 
 
+class CastManagerRuntimeStateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.tmpdir.name) / "config.json"
+        write_config(self.config_path)
+        self.state_path = Path(self.tmpdir.name) / "data" / "runtime-state.json"
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_runtime_state_overrides_config_host(self):
+        self.state_path.parent.mkdir(parents=True)
+        self.state_path.write_text(
+            json.dumps({"chromecasts": {"cc1": {"host": "10.0.0.9", "port": 8010}}}),
+            encoding="utf-8",
+        )
+
+        manager = CastManager(config_path=str(self.config_path), proxy_base="http://testserver")
+
+        self.assertEqual(manager.states["cc1"].host, "10.0.0.9")
+        self.assertEqual(manager.states["cc1"].port, 8010)
+
+    def test_persist_host_update_writes_runtime_state_not_config(self):
+        manager = CastManager(config_path=str(self.config_path), proxy_base="http://testserver")
+        config_before = self.config_path.read_text(encoding="utf-8")
+
+        state = manager.states["cc1"]
+        state.host = "10.0.0.7"
+        state.port = 8009
+        manager._persist_host_update(state)
+
+        self.assertEqual(self.config_path.read_text(encoding="utf-8"), config_before)
+        saved = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["chromecasts"]["cc1"], {"host": "10.0.0.7", "port": 8009})
+
+    def test_corrupt_runtime_state_is_ignored(self):
+        self.state_path.parent.mkdir(parents=True)
+        self.state_path.write_text("{not json", encoding="utf-8")
+
+        manager = CastManager(config_path=str(self.config_path), proxy_base="http://testserver")
+
+        self.assertEqual(manager.states["cc1"].host, "127.0.0.1")
+
+
 class CastManagerWatchdogTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
@@ -95,6 +139,7 @@ class CastManagerWatchdogTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_watchdog_relaunches_when_dashcast_is_not_active(self):
         self.state.connected = True
+        self.state.rotating = True
         self.state.display_launched = True
         self.state.last_display_launch_monotonic = (
             time.monotonic() - DASHCAST_LAUNCH_GRACE_SECONDS - 1
