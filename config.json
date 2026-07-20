@@ -3,7 +3,7 @@
     {
       "id": "cc1",
       "name": "ITU_Chromecast 1",
-      "host": "172.25.19.77",
+      "host": "172.25.19.160",
       "port": 8009,
       "uuid": "add083f9-01dd-db70-7bea-a2bfb817c86e",
       "resolution": [
