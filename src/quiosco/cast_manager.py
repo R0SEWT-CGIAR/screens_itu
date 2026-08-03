@@ -1,8 +1,12 @@
 import asyncio
+import ipaddress
 import json
 import logging
+import socket
 import time
+import urllib.request
 import uuid as uuid_mod
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +28,11 @@ RUNTIME_STATE_FILENAME = "runtime-state.json"
 DASHCAST_APP_ID = "84912283"
 WATCHDOG_INTERVAL_SECONDS = 15.0
 DISCOVERY_COOLDOWN_SECONDS = 60.0
+SUBNET_SCAN_COOLDOWN_SECONDS = 120.0
+SUBNET_SCAN_CONNECT_TIMEOUT_SECONDS = 1.0
+SUBNET_SCAN_WORKERS = 32
+EUREKA_PORT = 8008
+EUREKA_TIMEOUT_SECONDS = 3.0
 DASHCAST_LAUNCH_GRACE_SECONDS = 45.0
 DISPLAY_HEARTBEAT_TIMEOUT_SECONDS = 60.0
 FALLBACK_AFTER_FAILURES = 3
@@ -117,6 +126,7 @@ class CastManager:
         self.interval: float = cfg["default_interval_seconds"]
         self.proxy_base: str = proxy_base
         self._last_discovery_time: float = 0.0
+        self._last_subnet_scan_time: float = 0.0
         self.states: dict[str, CastState] = {}
         overrides = self._load_runtime_state()
         for cc in cfg["chromecasts"]:
@@ -440,6 +450,57 @@ class CastManager:
         logger.info("Discovery no encontró '%s' en la red", name)
         return None
 
+    def _probe_cast_port(self, host: str, port: int) -> bool:
+        try:
+            with socket.create_connection(
+                (host, port), timeout=SUBNET_SCAN_CONNECT_TIMEOUT_SECONDS
+            ):
+                return True
+        except OSError:
+            return False
+
+    def _device_name(self, host: str) -> Optional[str]:
+        """Nombre del dispositivo vía la API de setup del Chromecast (puerto 8008)."""
+        url = f"http://{host}:{EUREKA_PORT}/setup/eureka_info?params=name"
+        try:
+            with urllib.request.urlopen(url, timeout=EUREKA_TIMEOUT_SECONDS) as resp:
+                return json.load(resp).get("name")
+        except Exception:
+            return None
+
+    def _scan_subnet_for_device(
+        self, name: str, last_host: str, port: int
+    ) -> Optional[tuple[str, int]]:
+        """Fallback del mDNS: barre el /24 de la última IP conocida buscando el puerto
+        de Cast y confirma identidad por eureka_info. Necesario porque el mDNS es
+        multicast de segmento y no cruza subredes (el servidor puede estar en otra)."""
+        if time.monotonic() - self._last_subnet_scan_time < SUBNET_SCAN_COOLDOWN_SECONDS:
+            return None
+        self._last_subnet_scan_time = time.monotonic()
+
+        try:
+            if ipaddress.ip_address(last_host).version != 4:
+                return None
+            network = ipaddress.ip_network(f"{last_host}/24", strict=False)
+        except ValueError:
+            logger.error("IP inválida para escaneo de subred: %s", last_host)
+            return None
+
+        logger.info("Escaneando %s buscando '%s' (puerto %d)...", network, name, port)
+        hosts = [str(h) for h in network.hosts()]
+        with ThreadPoolExecutor(max_workers=SUBNET_SCAN_WORKERS) as pool:
+            open_flags = list(pool.map(lambda h: self._probe_cast_port(h, port), hosts))
+        candidates = [h for h, is_open in zip(hosts, open_flags) if is_open]
+
+        for host in candidates:
+            found = self._device_name(host)
+            if found and found.lower() == name.lower():
+                logger.info("Escaneo de subred encontró '%s' en %s:%d", name, host, port)
+                return (host, port)
+
+        logger.info("Escaneo de subred no encontró '%s' en %s", name, network)
+        return None
+
     def _load_runtime_state(self) -> dict:
         """Lee hosts/puertos descubiertos previamente (overlay sobre config.json)."""
         try:
@@ -496,6 +557,10 @@ class CastManager:
         connected = await asyncio.to_thread(self._connect_state, state)
         if not connected:
             result = await asyncio.to_thread(self._discover_by_name, state.name)
+            if result is None:
+                result = await asyncio.to_thread(
+                    self._scan_subnet_for_device, state.name, state.host, state.port
+                )
             if result:
                 new_host, new_port = result
                 if new_host != state.host or new_port != state.port:

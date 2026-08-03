@@ -113,6 +113,85 @@ class CastManagerRuntimeStateTests(unittest.TestCase):
         self.assertEqual(manager.states["cc1"].host, "127.0.0.1")
 
 
+class CastManagerSubnetScanTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.config_path = Path(self.tmpdir.name) / "config.json"
+        write_config(self.config_path)
+        self.state_path = Path(self.tmpdir.name) / "data" / "runtime-state.json"
+        self.manager = CastManager(config_path=str(self.config_path), proxy_base="http://testserver")
+        self.state = self.manager.states["cc1"]
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_scan_finds_device_by_name_on_new_ip(self):
+        self.manager._probe_cast_port = lambda host, port: host == "10.0.0.54"
+        self.manager._device_name = lambda host: "Test Chromecast"
+
+        result = self.manager._scan_subnet_for_device("Test Chromecast", "10.0.0.160", 8009)
+
+        self.assertEqual(result, ("10.0.0.54", 8009))
+
+    def test_scan_matches_name_case_insensitively(self):
+        self.manager._probe_cast_port = lambda host, port: host == "10.0.0.54"
+        self.manager._device_name = lambda host: "TEST chromecast"
+
+        result = self.manager._scan_subnet_for_device("Test Chromecast", "10.0.0.160", 8009)
+
+        self.assertEqual(result, ("10.0.0.54", 8009))
+
+    def test_scan_ignores_devices_with_other_name(self):
+        self.manager._probe_cast_port = lambda host, port: host == "10.0.0.54"
+        self.manager._device_name = lambda host: "Otro Chromecast"
+
+        result = self.manager._scan_subnet_for_device("Test Chromecast", "10.0.0.160", 8009)
+
+        self.assertIsNone(result)
+
+    def test_scan_respects_cooldown(self):
+        probes = []
+        self.manager._probe_cast_port = lambda host, port: probes.append(host) or False
+        self.manager._device_name = lambda host: None
+
+        self.manager._scan_subnet_for_device("Test Chromecast", "10.0.0.160", 8009)
+        first_count = len(probes)
+        result = self.manager._scan_subnet_for_device("Test Chromecast", "10.0.0.160", 8009)
+
+        self.assertEqual(first_count, 254)
+        self.assertIsNone(result)
+        self.assertEqual(len(probes), first_count)
+
+    def test_scan_rejects_invalid_or_ipv6_host(self):
+        self.manager._probe_cast_port = lambda host, port: True
+        self.manager._device_name = lambda host: "Test Chromecast"
+
+        self.assertIsNone(self.manager._scan_subnet_for_device("Test Chromecast", "no-es-ip", 8009))
+        self.manager._last_subnet_scan_time = 0.0
+        self.assertIsNone(self.manager._scan_subnet_for_device("Test Chromecast", "fe80::1", 8009))
+
+    async def test_recover_uses_subnet_scan_when_mdns_fails(self):
+        connect_hosts = []
+
+        def fake_connect(state):
+            connect_hosts.append(state.host)
+            ok = state.host == "10.0.0.54"
+            state.connected = ok
+            return ok
+
+        self.manager._connect_state = fake_connect
+        self.manager._discover_by_name = lambda name: None
+        self.manager._scan_subnet_for_device = lambda name, host, port: ("10.0.0.54", 8009)
+
+        await self.manager._recover_state(self.state, "Socket desconectado")
+
+        self.assertEqual(self.state.host, "10.0.0.54")
+        self.assertTrue(self.state.connected)
+        self.assertEqual(connect_hosts, ["127.0.0.1", "10.0.0.54"])
+        saved = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["chromecasts"]["cc1"], {"host": "10.0.0.54", "port": 8009})
+
+
 class CastManagerWatchdogTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
