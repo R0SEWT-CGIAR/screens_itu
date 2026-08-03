@@ -58,6 +58,13 @@
       "url": "https://gigwa.cgiar.org/",
       "label": "GIGWA",
       "zoom": 0.9
+    },
+    {
+      "url": "http://172.25.19.173:3456/",
+      "label": "Suite de agentes",
+      "zoom": 1.0,
+      "optional": true,
+      "direct": true
     }
   ],
   "default_interval_seconds": 15,

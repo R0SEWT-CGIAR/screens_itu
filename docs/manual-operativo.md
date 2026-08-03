@@ -96,6 +96,8 @@ Campos principales:
 | `links[].url` | Si | - | URL a mostrar |
 | `links[].label` | Si | - | Etiqueta en UI |
 | `links[].zoom` | No | `1.0` | Escala visual por pagina |
+| `links[].optional` | No | `false` | El servidor chequea disponibilidad (GET, cache 30s) y la rotacion salta el link si esta caido. Para servicios intermitentes (p.ej. una app en la laptop de un operador) |
+| `links[].direct` | No | `false` | El iframe carga la URL tal cual, sin proxy `/p/`. Para apps en la misma red que los Chromecasts (SPA con websockets que el proxy no soporta) |
 | `default_interval_seconds` | Si | - | Intervalo de rotacion, minimo 5s |
 | `screenshot_gif_duration_seconds` | No | `60` | Duracion del GIF por URL screenshot |
 

@@ -236,8 +236,14 @@ def _can_proxy(url: str) -> bool:
     return not _use_screenshot(url)
 
 
-def _iframe_src(url: str) -> str:
-    """Genera el src del iframe: /proxy/ para PRTG, /p/ para externas."""
+def _iframe_src(url: str, direct: bool = False) -> str:
+    """Genera el src del iframe: /proxy/ para PRTG, /p/ para externas.
+
+    Con direct=True devuelve la URL tal cual: para apps de la misma red que los
+    Chromecasts (SPA con assets/websockets que el proxy /p/ no soporta)."""
+    if direct:
+        return url
+
     parsed = urlparse(url)
 
     # PRTG interno: usar /proxy/{path}
@@ -287,12 +293,21 @@ def cast_display(cc_id: str = "cc1"):
                 f' object-fit:fill">\n'
             )
         else:
-            src = _iframe_src(url)
-            iframes_html += (
-                f'  <iframe id="frame-{i}" src="{src}" class="frame"'
-                f' style="display:none; width:{vw}px; height:{vh}px;'
-                f' transform:scale({sx},{sy}); transform-origin:top left;"></iframe>\n'
-            )
+            src = _iframe_src(url, direct=link.get("direct", False))
+            if link.get("optional"):
+                # No precargar: puede estar caido al abrir la display page.
+                # El JS le pone src al mostrarlo (recarga fresca en cada slot).
+                iframes_html += (
+                    f'  <iframe id="frame-{i}" src="about:blank" data-lazy-src="{src}"'
+                    f' class="frame" style="display:none; width:{vw}px; height:{vh}px;'
+                    f' transform:scale({sx},{sy}); transform-origin:top left;"></iframe>\n'
+                )
+            else:
+                iframes_html += (
+                    f'  <iframe id="frame-{i}" src="{src}" class="frame"'
+                    f' style="display:none; width:{vw}px; height:{vh}px;'
+                    f' transform:scale({sx},{sy}); transform-origin:top left;"></iframe>\n'
+                )
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -342,9 +357,17 @@ def cast_display(cc_id: str = "cc1"):
         var data = JSON.parse(xhr.responseText);
         if (data.index !== currentIndex) {{
           var oldFrame = document.getElementById("frame-" + currentIndex);
-          if (oldFrame) oldFrame.style.display = "none";
+          if (oldFrame) {{
+            oldFrame.style.display = "none";
+            if (oldFrame.getAttribute("data-lazy-src")) {{
+              oldFrame.setAttribute("src", "about:blank");
+            }}
+          }}
           currentIndex = data.index;
           var newFrame = document.getElementById("frame-" + currentIndex);
+          if (newFrame && newFrame.getAttribute("data-lazy-src")) {{
+            newFrame.setAttribute("src", newFrame.getAttribute("data-lazy-src"));
+          }}
           if (data.render_mode === "screenshot") {{
             refreshScreenshotFrame(newFrame, data.asset_key, data.asset_revision);
             currentAssetKey = data.asset_key;
@@ -433,7 +456,7 @@ def cast_startup_check(cc_id: str = "cc1"):
                 f' object-fit:fill">\n'
             )
         else:
-            src = _iframe_src(url)
+            src = _iframe_src(url, direct=link.get("direct", False))
             frames_html += (
                 f'  <iframe id="startup-frame-{i}" src="{src}" class="frame"'
                 f' style="display:none; width:{vw}px; height:{vh}px;'

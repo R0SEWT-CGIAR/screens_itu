@@ -113,6 +113,77 @@ class CastManagerRuntimeStateTests(unittest.TestCase):
         self.assertEqual(manager.states["cc1"].host, "127.0.0.1")
 
 
+class CastManagerOptionalLinksTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        config_path = Path(self.tmpdir.name) / "config.json"
+        write_config(config_path)
+        self.manager = CastManager(config_path=str(config_path), proxy_base="http://testserver")
+        self.state = self.manager.states["cc1"]
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_non_optional_links_never_probe(self):
+        def explode(url):
+            raise AssertionError("un link no-optional no debe probarse")
+
+        self.manager._probe_link = explode
+
+        self.assertTrue(self.manager._link_available({"url": "https://a", "label": "A"}))
+        self.assertTrue(self.manager._link_available(None))
+
+    def test_advance_skips_unavailable_optional_link(self):
+        self.manager.links = [
+            {"url": "https://a", "label": "A"},
+            {"url": "http://suite:3456/", "label": "Suite", "optional": True},
+            {"url": "https://b", "label": "B"},
+        ]
+        self.manager._probe_link = lambda url: False
+        self.state.current_index = 0
+
+        self.manager._advance_index(self.state)
+
+        self.assertEqual(self.state.current_index, 2)
+
+    def test_advance_includes_optional_link_when_available(self):
+        self.manager.links = [
+            {"url": "https://a", "label": "A"},
+            {"url": "http://suite:3456/", "label": "Suite", "optional": True},
+            {"url": "https://b", "label": "B"},
+        ]
+        self.manager._probe_link = lambda url: True
+        self.state.current_index = 0
+
+        self.manager._advance_index(self.state)
+
+        self.assertEqual(self.state.current_index, 1)
+
+    def test_probe_result_is_cached_within_ttl(self):
+        calls = []
+        self.manager._probe_link = lambda url: calls.append(url) or False
+        link = {"url": "http://suite:3456/", "label": "Suite", "optional": True}
+
+        first = self.manager._link_available(link)
+        second = self.manager._link_available(link)
+
+        self.assertFalse(first)
+        self.assertFalse(second)
+        self.assertEqual(len(calls), 1)
+
+    def test_advance_falls_back_when_all_links_unavailable(self):
+        self.manager.links = [
+            {"url": "http://a", "label": "A", "optional": True},
+            {"url": "http://b", "label": "B", "optional": True},
+        ]
+        self.manager._probe_link = lambda url: False
+        self.state.current_index = 0
+
+        self.manager._advance_index(self.state)
+
+        self.assertEqual(self.state.current_index, 1)
+
+
 class CastManagerSubnetScanTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()

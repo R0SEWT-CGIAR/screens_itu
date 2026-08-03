@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import httpx
 import pychromecast
 from pychromecast.controllers.dashcast import DashCastController
 from pychromecast.generated.cast_channel_pb2 import CastMessage
@@ -33,6 +34,8 @@ SUBNET_SCAN_CONNECT_TIMEOUT_SECONDS = 1.0
 SUBNET_SCAN_WORKERS = 32
 EUREKA_PORT = 8008
 EUREKA_TIMEOUT_SECONDS = 3.0
+LINK_AVAILABILITY_TTL_SECONDS = 30.0
+LINK_AVAILABILITY_TIMEOUT_SECONDS = 3.0
 DASHCAST_LAUNCH_GRACE_SECONDS = 45.0
 DISPLAY_HEARTBEAT_TIMEOUT_SECONDS = 60.0
 FALLBACK_AFTER_FAILURES = 3
@@ -127,6 +130,7 @@ class CastManager:
         self.proxy_base: str = proxy_base
         self._last_discovery_time: float = 0.0
         self._last_subnet_scan_time: float = 0.0
+        self._link_availability: dict[str, tuple[float, bool]] = {}
         self.states: dict[str, CastState] = {}
         overrides = self._load_runtime_state()
         for cc in cfg["chromecasts"]:
@@ -149,6 +153,46 @@ class CastManager:
         if not self.links:
             return None
         return self.links[state.current_index % len(self.links)]
+
+    def _probe_link(self, url: str) -> bool:
+        try:
+            with httpx.Client(
+                verify=False,
+                timeout=LINK_AVAILABILITY_TIMEOUT_SECONDS,
+                follow_redirects=True,
+            ) as client:
+                resp = client.get(url)
+            return resp.status_code < 500
+        except Exception:
+            return False
+
+    def _link_available(self, link: Optional[dict]) -> bool:
+        """True salvo que el link sea optional y su probe (cacheado por TTL) falle."""
+        if not link or not link.get("optional"):
+            return True
+        url = link["url"]
+        cached = self._link_availability.get(url)
+        if cached and time.monotonic() - cached[0] < LINK_AVAILABILITY_TTL_SECONDS:
+            return cached[1]
+        available = self._probe_link(url)
+        self._link_availability[url] = (time.monotonic(), available)
+        if cached is None or cached[1] != available:
+            logger.info(
+                "Link opcional '%s': %s",
+                link.get("label", url),
+                "disponible" if available else "no disponible, se salta en rotacion",
+            )
+        return available
+
+    def _advance_index(self, state: CastState) -> None:
+        """Avanza al siguiente link disponible; si ninguno lo esta, avanza normal."""
+        n = len(self.links)
+        for step in range(1, n + 1):
+            candidate = (state.current_index + step) % n
+            if self._link_available(self.links[candidate]):
+                state.current_index = candidate
+                return
+        state.current_index = (state.current_index + 1) % n
 
     def _sync_current_link_state(self, state: CastState) -> None:
         link = self._current_link(state)
@@ -349,6 +393,8 @@ class CastManager:
 
         try:
             while state.rotating:
+                if not await asyncio.to_thread(self._link_available, self._current_link(state)):
+                    await asyncio.to_thread(self._advance_index, state)
                 self._sync_current_link_state(state)
                 logger.info(
                     "Rotando a [%d] %s en %s",
@@ -370,7 +416,7 @@ class CastManager:
                     self._relaunch_display(cc_id)
 
                 await asyncio.sleep(self.interval)
-                state.current_index = (state.current_index + 1) % len(self.links)
+                await asyncio.to_thread(self._advance_index, state)
         except asyncio.CancelledError:
             logger.info("Rotacion cancelada para %s", state.name)
         except Exception as exc:

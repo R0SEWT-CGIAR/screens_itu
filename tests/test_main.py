@@ -32,6 +32,12 @@ def write_config(config_path: Path) -> None:
                         "url": "https://172.25.0.22/public/mapshow.htm?id=2",
                         "label": "Internal 2",
                     },
+                    {
+                        "url": "http://172.25.19.173:3456/",
+                        "label": "Suite opcional",
+                        "optional": True,
+                        "direct": True,
+                    },
                 ],
                 "default_interval_seconds": 30,
             }
@@ -102,6 +108,23 @@ class MainRouteTests(unittest.TestCase):
         self.assertIn("refreshScreenshotFrame", html)
         self.assertIn('"/static/screenshots/" + assetKey + ".gif?v=" + version', html)
         self.assertIn('<iframe id="frame-1"', html)
+
+    def test_cast_display_renders_optional_direct_link_lazily(self):
+        response = main.cast_display("cc1")
+        html = response.body.decode("utf-8")
+
+        # direct=True: URL cruda, sin pasar por /p/
+        self.assertIn('data-lazy-src="http://172.25.19.173:3456/"', html)
+        self.assertNotIn("/p/http%3A%2F%2F172.25.19.173%3A3456", html)
+        # optional=True: sin precarga, el JS pone el src al mostrarlo
+        self.assertIn('<iframe id="frame-4" src="about:blank"', html)
+        self.assertIn('newFrame.getAttribute("data-lazy-src")', html)
+
+    def test_iframe_src_direct_returns_url_as_is(self):
+        self.assertEqual(
+            main._iframe_src("http://172.25.19.173:3456/", direct=True),
+            "http://172.25.19.173:3456/",
+        )
 
     def test_cast_startup_check_uses_all_configured_links(self):
         response = main.cast_startup_check("cc1")
