@@ -1,0 +1,22 @@
+# Despliegue en produccion (exodia, Linux) usando la imagen publicada en Docker Hub.
+# No requiere clonar el repo completo: basta esta carpeta con config.json.
+#
+#   docker compose -f docker-compose.exodia.yml up -d
+#
+# Notas:
+# - network_mode: host permite mDNS a nivel de host y evita mapeos de puertos.
+# - PROXY_BASE por defecto apunta a la IP de exodia (172.25.21.37); si el servicio
+#   se muda de maquina, sobreescribir con la IP nueva (la que ven los Chromecasts).
+# - El mDNS no cruza subredes: si un Chromecast cambia de IP, el recovery lo
+#   reencuentra escaneando el /24 de su ultima IP conocida (>= 0.1.1).
+services:
+  quiosco:
+    image: cipotato/quiosco:latest
+    network_mode: host
+    environment:
+      - PROXY_BASE=${PROXY_BASE:-http://172.25.21.37:8000}
+    volumes:
+      - ./config.json:/app/config.json
+      - ./static/screenshots:/app/static/screenshots
+      - ./data:/app/data
+    restart: unless-stopped

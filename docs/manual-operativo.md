@@ -224,7 +224,34 @@ docker compose -f docker-compose.windows.yml up -d
 Limitaciones en Windows (Docker Desktop):
 
 - `network_mode: host` no existe; el compose de Windows mapea `8000:8000`.
-- El discovery mDNS no funciona desde el contenedor: si un Chromecast cambia de IP, actualizar `config.json` a mano y reiniciar (recomendado: reserva DHCP para los Chromecasts).
+- El discovery mDNS no funciona desde el contenedor. Desde la version 0.1.1 el recovery reencuentra por si solo a un Chromecast que cambio de IP (escaneo TCP del /24 de su ultima IP conocida); aun asi se recomienda reserva DHCP para los Chromecasts.
+
+### Opcion F: Linux con imagen de Docker Hub (produccion actual: exodia)
+
+Igual que la Opcion E pero en Linux, donde si existe `network_mode: host`. Es el despliegue actual de produccion en `exodia` (`172.25.21.37`, Ubuntu 24.04).
+
+1. Instalar Docker (`sudo apt install docker.io docker-compose-v2`) y agregar el usuario operativo al grupo `docker`.
+2. Crear una carpeta de despliegue (p.ej. `~/quiosco/`) con:
+   - `docker-compose.exodia.yml` (de este repo; renombrable a `docker-compose.yml`)
+   - `config.json` (IPs/UUIDs de los Chromecasts y links)
+   - `static/screenshots/` con los GIFs seed (opcional; se regeneran solos)
+3. Arrancar:
+
+```bash
+cd ~/quiosco
+docker compose up -d
+```
+
+4. Si `ufw` esta activo, permitir el puerto 8000 entrante (`sudo ufw allow 8000/tcp`) cuando los Chromecasts no carguen la display page.
+
+Para actualizar a una nueva version de la imagen:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Tras cada reinicio del contenedor la rotacion arranca detenida: iniciar cada Chromecast desde la UI o con `POST /api/chromecasts/<id>/start`.
 
 ### Checklist posterior al despliegue
 
@@ -369,6 +396,7 @@ La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py`. Cualquier cambio requ
 - Verifica socket, handshake y receiver activo.
 - El poll de la display page a `/api/current` (cada 2s) actua como heartbeat: `display_ready=true` significa DashCast activo **y** pagina cargada latiendo. Si rota sin heartbeat por mas de 60s (`DISPLAY_HEARTBEAT_TIMEOUT_SECONDS`), cuenta como degradacion aunque DashCast corra (caso tipico: `PROXY_BASE` apunta a una IP muerta y el logo de DashCast queda pegado, incidente 2026-07-20).
 - Si detecta degradacion, reconecta y relanza display page (con gracia de 45s tras cada lanzamiento de DashCast).
+- Si la reconexion falla, busca al Chromecast por nombre via discovery mDNS (cooldown 60s). Como el mDNS no cruza subredes (el servidor puede estar en otra, p.ej. exodia en `172.25.21.0/24` y los Chromecasts en `172.25.19.0/24`), si no aparece escanea el /24 de su ultima IP conocida buscando el puerto 8009 y confirma identidad por nombre via `eureka_info` (puerto 8008, cooldown 120s). La IP nueva se persiste en `data/runtime-state.json`, nunca en `config.json` (incidente 2026-08-03: cc1 se mudo de `.160` a `.54` por DHCP).
 - Si habia rotacion activa, la restablece manteniendo `current_index`.
 - `GET /api/status` expone `heartbeat_age_seconds` por Chromecast (~2s en operacion sana; `null` si nunca cargo).
 

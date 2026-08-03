@@ -6,8 +6,9 @@
 # Notas Windows:
 # - network_mode: host NO funciona en Docker Desktop; se mapea el puerto 8000.
 # - PROXY_BASE debe ser la IP LAN de la compu Windows (la que ven los Chromecasts).
-# - El discovery mDNS no funciona desde el contenedor en Windows: si un Chromecast
-#   cambia de IP hay que actualizar config.json a mano (o pedir reserva DHCP).
+# - El discovery mDNS no funciona desde el contenedor en Windows. Desde 0.1.1 el
+#   recovery reencuentra solo a un Chromecast que cambio de IP (escaneo TCP del /24
+#   de su ultima IP conocida); igual se recomienda reserva DHCP.
 services:
   quiosco:
     image: cipotato/quiosco:latest
