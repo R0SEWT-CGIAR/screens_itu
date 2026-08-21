@@ -3,8 +3,10 @@
 import asyncio
 import logging
 import re
+import time
 from io import BytesIO
 from pathlib import Path
+from typing import Callable
 
 from PIL import Image
 from playwright.async_api import async_playwright
@@ -104,8 +106,16 @@ async def screenshot_loop(
     gif_duration_seconds: float = 60,
     viewport_map: dict[str, tuple[int, int]] | None = None,
     output_size: tuple[int, int] = (1920, 1080),
+    link_source: Callable[[], tuple[list[str], dict[str, tuple[int, int]]]] | None = None,
+    recapture_queue: "asyncio.Queue[str] | None" = None,
 ):
-    """Periodically capture animated GIFs of the given URLs."""
+    """Periodically capture animated GIFs of the given URLs.
+
+    Con *link_source* la lista se re-resuelve en cada ciclo, para que un link
+    agregado desde la consola obtenga su GIF sin reiniciar el servicio. Con
+    *recapture_queue* un tecnico puede pedir la recaptura de una URL sin esperar
+    el ciclo completo.
+    """
     logger.info(
         "GIF capture loop started for %d URLs, interval=%ds, gif_duration=%ds",
         len(urls),
@@ -113,16 +123,42 @@ async def screenshot_loop(
         gif_duration_seconds,
     )
     viewports = viewport_map or {}
+
+    async def capture(url: str, sizes: dict[str, tuple[int, int]]) -> None:
+        vw, vh = sizes.get(url, output_size)
+        await take_gif(
+            url, screenshot_asset_path(url),
+            duration_seconds=gif_duration_seconds,
+            viewport_width=vw, viewport_height=vh,
+            output_width=output_size[0], output_height=output_size[1],
+        )
+
     while True:
+        if link_source is not None:
+            urls, viewports = link_source()
         for url in urls:
-            vw, vh = viewports.get(url, output_size)
-            await take_gif(
-                url, screenshot_asset_path(url),
-                duration_seconds=gif_duration_seconds,
-                viewport_width=vw, viewport_height=vh,
-                output_width=output_size[0], output_height=output_size[1],
-            )
-        await asyncio.sleep(interval_seconds)
+            await capture(url, viewports)
+        await _sleep_serving_recaptures(
+            interval_seconds, recapture_queue, capture, viewports
+        )
+
+
+async def _sleep_serving_recaptures(interval_seconds, queue, capture, viewports) -> None:
+    """Espera el intervalo, atendiendo pedidos de recaptura mientras tanto."""
+    deadline = time.monotonic() + interval_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        if queue is None:
+            await asyncio.sleep(remaining)
+            return
+        try:
+            url = await asyncio.wait_for(queue.get(), timeout=remaining)
+        except (asyncio.TimeoutError, TimeoutError):
+            return
+        logger.info("Recaptura pedida desde la consola: %s", url)
+        await capture(url, viewports)
 
 
 def start_screenshot_task(
@@ -131,8 +167,13 @@ def start_screenshot_task(
     gif_duration_seconds: float = 60,
     viewport_map: dict[str, tuple[int, int]] | None = None,
     output_size: tuple[int, int] = (1920, 1080),
+    link_source: Callable[[], tuple[list[str], dict[str, tuple[int, int]]]] | None = None,
+    recapture_queue: "asyncio.Queue[str] | None" = None,
 ) -> asyncio.Task:
     """Start the GIF capture background task. Call from within a running event loop."""
     return asyncio.create_task(
-        screenshot_loop(urls, interval_seconds, gif_duration_seconds, viewport_map, output_size)
+        screenshot_loop(
+            urls, interval_seconds, gif_duration_seconds, viewport_map, output_size,
+            link_source=link_source, recapture_queue=recapture_queue,
+        )
     )

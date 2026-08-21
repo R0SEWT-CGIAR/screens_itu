@@ -50,7 +50,9 @@ Si discovery no encuentra dispositivos, validar primero conectividad de red, VLA
 
 Copiar al menos `host`, `port` y `uuid` de cada Chromecast descubierto.
 
-Nota: `config.json` es solo la semilla. Cuando el watchdog redescubre un Chromecast en otra IP (DHCP), guarda el host/puerto en `data/runtime-state.json` (no versionado, montado como volumen en Docker). Ese estado tiene prioridad sobre `config.json` al arrancar; para forzar la IP de `config.json`, borrar `data/runtime-state.json`.
+Nota sobre IPs: para los hosts, `config.json` es solo la semilla. Cuando el watchdog redescubre un Chromecast en otra IP (DHCP), guarda el host/puerto en `data/runtime-state.json` (no versionado, montado como volumen en Docker). Ese estado tiene prioridad sobre `config.json` al arrancar; para forzar la IP de `config.json`, borrar `data/runtime-state.json`. Las IPs descubiertas nunca se escriben en `config.json`.
+
+Nota sobre links: `config.json` tambien es el archivo que **escribe** la consola cuando un tecnico edita links, playlists o el intervalo. Cada guardado deja una copia previa en `data/config-backups/`. Con el servicio corriendo, editar los links desde la consola y no a mano: el proceso tiene la configuracion en memoria y el proximo guardado sobreescribe el archivo.
 
 Ejemplo minimo:
 
@@ -93,9 +95,12 @@ Campos principales:
 | `chromecasts[].port` | No | `8009` | Puerto de control |
 | `chromecasts[].uuid` | No | generado si falta | Identidad del dispositivo |
 | `chromecasts[].resolution` | No | `[1920, 1080]` | Resolucion de salida |
+| `chromecasts[].playlist` | No | ausente = todos | Ids de los links de esa pantalla, en orden. Lo escribe la consola; ausente significa "todos los links habilitados" |
+| `links[].id` | No | derivado de la URL | Id estable del link. Se asigna solo y sobrevive reordenamientos y borrados; es lo que referencian las playlists. No editarlo a mano |
 | `links[].url` | Si | - | URL a mostrar |
 | `links[].label` | Si | - | Etiqueta en UI |
-| `links[].zoom` | No | `1.0` | Escala visual por pagina |
+| `links[].zoom` | No | `1.0` | Escala visual por pagina, entre 0.1 y 4 |
+| `links[].enabled` | No | `true` | En `false` el link sale de la rotacion de todas las pantallas sin perder su configuracion |
 | `links[].optional` | No | `false` | El servidor chequea disponibilidad (GET, cache 30s) y la rotacion salta el link si esta caido. Para servicios intermitentes (p.ej. una app en la laptop de un operador) |
 | `links[].direct` | No | `false` | El iframe carga la URL tal cual, sin proxy `/p/`. Para apps en la misma red que los Chromecasts (SPA con websockets que el proxy no soporta) |
 | `default_interval_seconds` | Si | - | Intervalo de rotacion, minimo 5s |
@@ -289,11 +294,53 @@ http://<IP_DEL_SERVIDOR>:8000
 
 ### Acciones desde la UI
 
-- Iniciar rotacion por pantalla.
-- Detener rotacion por pantalla.
-- Ajustar intervalo global de rotacion.
-- Castear una URL puntual por pantalla.
-- Ejecutar `Debug interno` (`/cast/startup-check`) para validar carga de todas las paginas.
+La consola (`http://<servidor>:8000/`) permite operar y configurar sin entrar por SSH.
+Todo cambio se guarda en `config.json` y se aplica en caliente: la display page detecta
+la nueva revision en su poll de 2s y se recarga sola, sin relanzar DashCast.
+
+Por pantalla:
+
+- Iniciar y detener rotacion.
+- Saltar al link anterior o siguiente sin esperar el intervalo.
+- `Relanzar`: recarga la display page en el Chromecast. Es el primer arreglo a probar
+  cuando la pantalla quedo con el logo de DashCast fijo.
+- `Elegir links`: define que links muestra esa pantalla y en que orden (playlist propia).
+  `Usar todos` la devuelve al comportamiento por defecto.
+- Diagnostico en lenguaje claro: que pasa, por que, y que hacer.
+
+Sobre los links:
+
+- Agregar, editar (URL, nombre, zoom, opcional, directo) y borrar.
+- Reordenar con las flechas.
+- Habilitar / deshabilitar: un link deshabilitado sale de la rotacion de todas las
+  pantallas sin perder su configuracion. Es la accion correcta cuando una pagina esta
+  caida o mal configurada y no se quiere borrar el link.
+- `GIF`: recaptura el screenshot de ese link ahora, sin esperar el ciclo de 5 minutos.
+  Solo aparece en links que usan GIF (externas no proxyables e internas PRTG).
+- Castear un link puntual a una pantalla.
+
+Global:
+
+- Ajustar el intervalo de rotacion. Ahora queda persistido: antes se perdia en cada
+  reinicio del contenedor y volvia al valor de `config.json`.
+- `Debug interno` (`/cast/startup-check`) para validar la carga de todas las paginas.
+
+#### Deshacer un cambio
+
+Cada guardado deja una copia previa en `data/config-backups/config-<fecha>-<hora>.json`
+(se conservan las ultimas 20). Para volver atras:
+
+```bash
+ls -lt data/config-backups/ | head
+cp data/config-backups/config-20260820-141443.json config.json
+docker compose restart
+```
+
+#### Advertencia de acceso
+
+Los endpoints de configuracion no tienen autenticacion: cualquiera con acceso de red
+al puerto 8000 puede reescribir los links de las pantallas. Mientras eso siga asi, no
+exponer el servicio fuera de la red interna. Seguimiento en el bead `quiosco-pyj`.
 
 ### Monitoreo durante el turno
 
@@ -334,7 +381,10 @@ docker compose down
 | `fallback_active=true` en `/api/status` | DashCast no lanza (p.ej. receiver caido o sin internet); pantallas muestran GIFs via Default Media Receiver | Nada urgente: es el modo degradado esperado; revisar logs para la causa del fallo de DashCast | Sigue en fallback por horas o los GIFs quedan congelados |
 | Dashboard PRTG en blanco | Falla de acceso a `172.25.0.22` o proxy | Ejecutar `Debug interno`, validar alcance a PRTG desde servidor | PRTG responde en red pero no renderiza via Quiosco |
 | Sitio externo no carga en iframe | Restricciones `X-Frame-Options`, Cloudflare o CSP | Confirmar si esta en modo screenshot; evaluar reemplazo de URL | El sitio es critico y no existe alternativa |
-| GIF de screenshot no cambia | Falla de captura Playwright, timeout o Chromium ausente | Revisar logs, comprobar `uv run playwright install chromium` local o imagen Docker actualizada | Falla continua en varios ciclos de captura |
+| GIF de screenshot no cambia | Falla de captura Playwright, timeout o Chromium ausente | Pulsar `GIF` en ese link para recapturar y mirar los logs; comprobar `uv run playwright install chromium` local o imagen Docker actualizada | Falla continua en varios ciclos de captura |
+| Una pagina esta caida y ensucia la rotacion | La URL responde error o quedo mal configurada | Deshabilitar ese link desde la consola; sale de todas las pantallas sin perder su configuracion | La pagina es critica y no hay reemplazo |
+| Pantalla en negro con "Pantalla sin links configurados" | Su playlist quedo vacia o todos sus links estan deshabilitados | En la tarjeta de esa pantalla, `Elegir links` y marcar alguno, o `Usar todos` | — |
+| Un cambio hecho en la consola no se ve en la pantalla | La display page no esta haciendo su poll de 2s | Revisar el diagnostico de esa tarjeta; si dice que DashCast corre pero la pagina no carga, es `PROXY_BASE`. `Relanzar` fuerza la recarga | El relanzado no la recupera |
 | Rotacion no avanza | Intervalo invalido, estado detenido o error de current index | Revisar UI, `GET /api/status` y `GET /api/current/<id>` | El indice queda inconsistente tras reinicio |
 
 ### Comandos utiles
@@ -430,7 +480,16 @@ Sin la capa 3, PRTG pierde llamadas dinamicas y aparecen errores de conexion en 
 | `POST` | `/api/chromecasts/{id}/start` | Iniciar rotacion |
 | `POST` | `/api/chromecasts/{id}/stop` | Detener rotacion |
 | `POST` | `/api/chromecasts/{id}/cast` | Castear URL puntual |
-| `PUT` | `/api/config/interval` | Cambiar intervalo global |
+| `POST` | `/api/chromecasts/{id}/relaunch` | Recargar la display page |
+| `POST` | `/api/chromecasts/{id}/skip` | Saltar link (`{"step": 1}` o `-1`) |
+| `PUT` | `/api/chromecasts/{id}/playlist` | Links de esa pantalla (`null` = todos) |
+| `GET` | `/api/links` | Catalogo de links con sus ids |
+| `POST` | `/api/links` | Agregar link |
+| `PATCH` | `/api/links/{link_id}` | Editar link (incluye `enabled`) |
+| `DELETE` | `/api/links/{link_id}` | Borrar link |
+| `PUT` | `/api/links/order` | Reordenar (`{"link_ids": [...]}`) |
+| `POST` | `/api/links/{link_id}/recapture` | Recapturar el GIF ahora |
+| `PUT` | `/api/config/interval` | Cambiar intervalo global (persistido) |
 | `GET` | `/cast/display?cc_id=...` | Display page usada por DashCast |
 | `GET` | `/cast/startup-check` | Validacion visual de URLs |
 | `GET/POST/PUT` | `/proxy/{path}` | Proxy interno a PRTG |
@@ -438,12 +497,24 @@ Sin la capa 3, PRTG pierde llamadas dinamicas y aparecen errores de conexion en 
 
 ### Cambios que requieren reinicio
 
-Reiniciar servicio (`docker compose down` + `docker compose up -d --build`) cuando cambie alguno de estos elementos:
+Ya **no** requieren reinicio, porque la consola los aplica en caliente:
 
-- `config.json`
-- `PROXY_BASE`
-- Lista `SCREENSHOT_SITES`
-- Dependencias de captura Playwright/Chromium
+- Links: agregar, editar, borrar, reordenar, habilitar/deshabilitar.
+- Playlists por pantalla.
+- Intervalo de rotacion.
+- Captura de GIF de un link nuevo: el ciclo re-resuelve sus objetivos en cada pasada.
+
+Siguen requiriendo reinicio (`docker compose down` + `docker compose up -d --build`):
+
+- Edicion de `config.json` a mano por SSH.
+- Alta o baja de un Chromecast, y cambios de su nombre, uuid o resolucion.
+- `PROXY_BASE`.
+- Lista `SCREENSHOT_SITES` (esta en el codigo, no en `config.json`).
+- Dependencias de captura Playwright/Chromium.
+
+Editar `config.json` a mano mientras el servicio corre es riesgoso: el proceso tiene la
+configuracion en memoria y el proximo guardado desde la consola sobreescribe el archivo.
+Con el servicio arriba, cambiar los links desde la consola, no por SSH.
 
 ### Pruebas de desarrollo
 
@@ -451,7 +522,11 @@ Reiniciar servicio (`docker compose down` + `docker compose up -d --build`) cuan
 uv run python -m unittest discover -s tests -v
 ```
 
-La suite actual cubre generacion de display page, metadatos de screenshot assets y comportamiento principal de watchdog. No cubre completamente proxy end-to-end ni casting con hardware real.
+La suite actual cubre generacion de display page, metadatos de screenshot assets,
+comportamiento principal de watchdog, persistencia de `config.json`, playlists por
+pantalla, los endpoints de la consola y el diagnostico por pantalla. No cubre
+completamente proxy end-to-end, casting con hardware real, ni el JavaScript de la
+consola en un navegador.
 
 ### Referencias
 

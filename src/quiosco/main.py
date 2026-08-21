@@ -10,11 +10,12 @@ from urllib.parse import quote, unquote, urlparse
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from pathlib import Path
 
+from . import config_store, health
 from .cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
 from .screenshot import start_screenshot_task
 from .screenshot_assets import screenshot_asset_key, screenshot_asset_revision
@@ -89,6 +90,8 @@ PROXY_BASE = _resolve_proxy_base()
 
 manager = CastManager(config_path=str(_CONFIG_PATH), proxy_base=PROXY_BASE)
 proxy_client: httpx.AsyncClient | None = None
+# Pedidos de recaptura de GIF desde la consola; la crea el lifespan.
+recapture_queue: "asyncio.Queue[str] | None" = None
 
 
 @asynccontextmanager
@@ -100,26 +103,39 @@ async def lifespan(app: FastAPI):
     # Use first CC resolution as output size (all CCs typically share a screen res)
     first_state = next(iter(manager.states.values()), None)
     cast_w, cast_h = first_state.resolution if first_state else DEFAULT_RESOLUTION
-    # Capturamos GIFs de las unproxyables (se muestran como screenshot) y tambien
-    # de las internas PRTG: esas siguen renderizando como iframe, pero su GIF
-    # sirve de asset para el fallback via Default Media Receiver.
-    unproxyable_links = [
-        l for l in manager.links if _use_screenshot(l["url"]) or _is_internal_url(l["url"])
-    ]
-    unproxyable_urls = [l["url"] for l in unproxyable_links]
-    viewport_map = {
-        l["url"]: (int(cast_w / l.get("zoom", 1.0)), int(cast_h / l.get("zoom", 1.0)))
-        for l in unproxyable_links
-    }
-    with open(_CONFIG_PATH) as f:
-        _cfg = json.load(f)
-    gif_duration = _cfg.get("screenshot_gif_duration_seconds", 60)
-    screenshot_task = None
-    if unproxyable_urls:
-        screenshot_task = start_screenshot_task(
-            unproxyable_urls, interval_seconds=300, gif_duration_seconds=gif_duration,
-            viewport_map=viewport_map, output_size=(cast_w, cast_h),
-        )
+    gif_duration = manager.config.get("screenshot_gif_duration_seconds", 60)
+
+    def _capture_targets() -> tuple[list[str], dict[str, tuple[int, int]]]:
+        """Links que necesitan GIF, re-resueltos en cada ciclo de captura.
+
+        Capturamos las unproxyables (se muestran como screenshot) y tambien las
+        internas PRTG: esas siguen renderizando como iframe, pero su GIF sirve
+        de asset para el fallback via Default Media Receiver. Se re-resuelve en
+        cada ciclo para que un link agregado desde la consola obtenga su GIF sin
+        reiniciar el servicio.
+        """
+        links = [
+            l
+            for l in manager.links
+            if l.get("enabled", True)
+            and (_use_screenshot(l["url"]) or _is_internal_url(l["url"]))
+        ]
+        viewports = {
+            l["url"]: (int(cast_w / l.get("zoom", 1.0)), int(cast_h / l.get("zoom", 1.0)))
+            for l in links
+        }
+        return [l["url"] for l in links], viewports
+
+    global recapture_queue
+    recapture_queue = asyncio.Queue()
+    initial_urls, initial_viewports = _capture_targets()
+    # Arranca siempre, incluso sin targets: el tecnico puede agregar un link que
+    # necesite screenshot en cualquier momento.
+    screenshot_task = start_screenshot_task(
+        initial_urls, interval_seconds=300, gif_duration_seconds=gif_duration,
+        viewport_map=initial_viewports, output_size=(cast_w, cast_h),
+        link_source=_capture_targets, recapture_queue=recapture_queue,
+    )
     watchdog_task = manager.start_watchdog_task(interval_seconds=WATCHDOG_INTERVAL_SECONDS)
     yield
     if screenshot_task:
@@ -136,9 +152,18 @@ app = FastAPI(lifespan=lifespan)
 
 # --- API ---
 
+@app.exception_handler(config_store.ConfigError)
+async def config_error_handler(request: Request, exc: config_store.ConfigError):
+    """Los mensajes de config_store estan escritos para que los lea el tecnico."""
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 @app.get("/api/status")
 def status():
-    return manager.get_status()
+    payload = manager.get_status()
+    for cc in payload["chromecasts"]:
+        cc["health"] = health.diagnose(cc, payload["interval_seconds"])
+    return payload
 
 
 @app.get("/api/current/{cc_id}")
@@ -157,6 +182,10 @@ def current(cc_id: str):
     asset_revision = screenshot_asset_revision(asset_key)
     return {
         "index": state.current_index,
+        # La display page keyea sus frames por id de link y se recarga sola
+        # cuando config_revision cambia (links o playlists editados).
+        "link_id": link["id"] if link else None,
+        "config_revision": manager.config_revision,
         "rotating": state.rotating,
         "current_url": current_url,
         "render_mode": render_mode,
@@ -197,10 +226,122 @@ class IntervalRequest(BaseModel):
 
 @app.put("/api/config/interval")
 async def set_interval(body: IntervalRequest):
-    if body.seconds < 5:
-        raise HTTPException(400, "El intervalo minimo es 5 segundos")
-    manager.set_interval(body.seconds)
-    return {"ok": True, "interval_seconds": body.seconds}
+    # Persiste en config.json: antes el cambio se perdia en cada reinicio.
+    seconds = manager.set_interval(body.seconds)
+    return {"ok": True, "interval_seconds": seconds}
+
+
+# --- Configuracion de links (consola de tecnicos) ---
+
+class LinkCreate(BaseModel):
+    url: str
+    label: str = ""
+    zoom: float = 1.0
+    optional: bool = False
+    direct: bool = False
+    enabled: bool = True
+
+
+class LinkUpdate(BaseModel):
+    url: Optional[str] = None
+    label: Optional[str] = None
+    zoom: Optional[float] = None
+    optional: Optional[bool] = None
+    direct: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
+class LinkOrderRequest(BaseModel):
+    link_ids: list[str]
+
+
+class PlaylistRequest(BaseModel):
+    # null devuelve la pantalla a "todos los links habilitados".
+    link_ids: Optional[list[str]] = None
+
+
+class SkipRequest(BaseModel):
+    step: int = 1
+
+
+@app.get("/api/links")
+def list_links():
+    return {"links": manager.links, "config_revision": manager.config_revision}
+
+
+@app.post("/api/links", status_code=201)
+def create_link(body: LinkCreate):
+    link = manager.add_link(body.model_dump())
+    return {"ok": True, "link": link, "config_revision": manager.config_revision}
+
+
+@app.patch("/api/links/{link_id}")
+def patch_link(link_id: str, body: LinkUpdate):
+    payload = body.model_dump(exclude_unset=True)
+    if not payload:
+        raise HTTPException(400, "No se envio ningun campo para actualizar")
+    link = manager.update_link(link_id, payload)
+    return {"ok": True, "link": link, "config_revision": manager.config_revision}
+
+
+@app.delete("/api/links/{link_id}")
+def remove_link(link_id: str):
+    manager.delete_link(link_id)
+    return {"ok": True, "config_revision": manager.config_revision}
+
+
+@app.put("/api/links/order")
+def reorder_links(body: LinkOrderRequest):
+    links = manager.reorder_links(body.link_ids)
+    return {"ok": True, "links": links, "config_revision": manager.config_revision}
+
+
+@app.post("/api/links/{link_id}/recapture")
+def recapture_link(link_id: str):
+    """Pide el GIF de un link ahora, sin esperar los 300s del ciclo."""
+    link = next((l for l in manager.links if l["id"] == link_id), None)
+    if not link:
+        raise HTTPException(404, f"No existe el link '{link_id}'")
+    if not (_use_screenshot(link["url"]) or _is_internal_url(link["url"])):
+        raise HTTPException(
+            400,
+            f"'{link['label']}' se muestra por iframe y no usa GIF; no hay nada que recapturar",
+        )
+    if recapture_queue is None:
+        raise HTTPException(503, "La captura de screenshots todavia no esta activa")
+    recapture_queue.put_nowait(link["url"])
+    return {"ok": True, "queued": link["url"]}
+
+
+@app.put("/api/chromecasts/{cc_id}/playlist")
+def set_playlist(cc_id: str, body: PlaylistRequest):
+    playlist = manager.set_playlist(cc_id, body.link_ids)
+    return {"ok": True, "playlist": playlist, "config_revision": manager.config_revision}
+
+
+# --- Acciones de recuperacion ---
+
+@app.post("/api/chromecasts/{cc_id}/relaunch")
+def relaunch_display(cc_id: str):
+    """Fuerza recargar la display page: el arreglo mas comun cuando queda
+    trabada con el logo de DashCast."""
+    if cc_id not in manager.states:
+        raise HTTPException(404, f"Chromecast '{cc_id}' no encontrado")
+    manager._relaunch_display(cc_id)
+    state = manager.states[cc_id]
+    if not state.display_launched:
+        raise HTTPException(502, state.last_error or "No se pudo relanzar la display page")
+    return {"ok": True}
+
+
+@app.post("/api/chromecasts/{cc_id}/skip")
+def skip_link(cc_id: str, body: SkipRequest):
+    if cc_id not in manager.states:
+        raise HTTPException(404, f"Chromecast '{cc_id}' no encontrado")
+    if not manager.skip(cc_id, body.step):
+        raise HTTPException(409, "La pantalla no tiene links para recorrer")
+    state = manager.states[cc_id]
+    return {"ok": True, "current_label": state.current_label, "current_url": state.current_url}
 
 
 # --- Display page para Chromecast ---
@@ -267,9 +408,15 @@ def _iframe_src(url: str, direct: bool = False) -> str:
 @app.get("/cast/display")
 def cast_display(cc_id: str = "cc1"):
     cast_w, cast_h = _cc_resolution(cc_id)
-    links = manager.links
+    # Solo los links de esta pantalla: con playlists, cada Chromecast puede
+    # tener una seleccion y un orden propios.
+    links = manager.links_for(cc_id)
+    config_revision = manager.config_revision
     iframes_html = ""
-    for i, link in enumerate(links):
+    for link in links:
+        # Los frames se keyean por id de link, no por posicion: asi reordenar o
+        # borrar un link no reasigna los frames de los demas.
+        frame_id = link["id"]
         url = link["url"]
         zoom = link.get("zoom", 1.0)
         # Viewport del contenido: resolución del CC ajustada por zoom
@@ -286,7 +433,7 @@ def cast_display(cc_id: str = "cc1"):
             asset_version = asset_revision if asset_revision is not None else "pending"
             src = f"/static/screenshots/{asset_key}.gif?v={asset_version}"
             iframes_html += (
-                f'  <img id="frame-{i}" data-asset-key="{asset_key}" src="{src}"'
+                f'  <img id="frame-{frame_id}" data-asset-key="{asset_key}" src="{src}"'
                 f' class="frame screenshot-frame" style="display:none;'
                 f' width:{vw}px; height:{vh}px;'
                 f' transform:scale({sx},{sy}); transform-origin:top left;'
@@ -298,13 +445,13 @@ def cast_display(cc_id: str = "cc1"):
                 # No precargar: puede estar caido al abrir la display page.
                 # El JS le pone src al mostrarlo (recarga fresca en cada slot).
                 iframes_html += (
-                    f'  <iframe id="frame-{i}" src="about:blank" data-lazy-src="{src}"'
+                    f'  <iframe id="frame-{frame_id}" src="about:blank" data-lazy-src="{src}"'
                     f' class="frame" style="display:none; width:{vw}px; height:{vh}px;'
                     f' transform:scale({sx},{sy}); transform-origin:top left;"></iframe>\n'
                 )
             else:
                 iframes_html += (
-                    f'  <iframe id="frame-{i}" src="{src}" class="frame"'
+                    f'  <iframe id="frame-{frame_id}" src="{src}" class="frame"'
                     f' style="display:none; width:{vw}px; height:{vh}px;'
                     f' transform:scale({sx},{sy}); transform-origin:top left;"></iframe>\n'
                 )
@@ -324,13 +471,26 @@ def cast_display(cc_id: str = "cc1"):
     height: {cast_h}px;
     border: none;
   }}
+  .notice {{
+    position: absolute;
+    top: 0; left: 0;
+    width: {cast_w}px;
+    height: {cast_h}px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #64748b;
+    font-family: system-ui, sans-serif;
+    font-size: {max(16, int(cast_h / 24))}px;
+  }}
 </style>
 </head>
 <body>
-{iframes_html}
+{iframes_html}<div id="empty-notice" class="notice" style="display:none">Pantalla sin links configurados</div>
 <script>
   var ccId = "{cc_id}";
-  var currentIndex = -1;
+  var configRevision = {config_revision};
+  var currentLinkId = null;
   var currentAssetKey = null;
   var currentAssetRevision = null;
 
@@ -355,16 +515,25 @@ def cast_display(cc_id: str = "cc1"):
       if (xhr.status !== 200) return;
       try {{
         var data = JSON.parse(xhr.responseText);
-        if (data.index !== currentIndex) {{
-          var oldFrame = document.getElementById("frame-" + currentIndex);
+        if (data.config_revision !== configRevision) {{
+          // El tecnico edito links o playlists: los frames horneados en esta
+          // pagina ya no corresponden, hay que reconstruirla. Esto evita tener
+          // que relanzar DashCast en cada cambio de configuracion.
+          window.location.reload();
+          return;
+        }}
+        var notice = document.getElementById("empty-notice");
+        if (notice) notice.style.display = data.link_id ? "none" : "flex";
+        if (data.link_id !== currentLinkId) {{
+          var oldFrame = document.getElementById("frame-" + currentLinkId);
           if (oldFrame) {{
             oldFrame.style.display = "none";
             if (oldFrame.getAttribute("data-lazy-src")) {{
               oldFrame.setAttribute("src", "about:blank");
             }}
           }}
-          currentIndex = data.index;
-          var newFrame = document.getElementById("frame-" + currentIndex);
+          currentLinkId = data.link_id;
+          var newFrame = document.getElementById("frame-" + currentLinkId);
           if (newFrame && newFrame.getAttribute("data-lazy-src")) {{
             newFrame.setAttribute("src", newFrame.getAttribute("data-lazy-src"));
           }}
@@ -381,7 +550,7 @@ def cast_display(cc_id: str = "cc1"):
           data.render_mode === "screenshot" &&
           (data.asset_key !== currentAssetKey || data.asset_revision !== currentAssetRevision)
         ) {{
-          var curFrame = document.getElementById("frame-" + currentIndex);
+          var curFrame = document.getElementById("frame-" + currentLinkId);
           refreshScreenshotFrame(curFrame, data.asset_key, data.asset_revision);
           currentAssetKey = data.asset_key;
           currentAssetRevision = data.asset_revision;
@@ -407,7 +576,7 @@ def cast_display(cc_id: str = "cc1"):
 @app.get("/cast/startup-check")
 def cast_startup_check(cc_id: str = "cc1"):
     cast_w, cast_h = _cc_resolution(cc_id)
-    links = manager.links
+    links = manager.links_for(cc_id)
     if not links:
         return HTMLResponse(
             content=f"""<!DOCTYPE html>

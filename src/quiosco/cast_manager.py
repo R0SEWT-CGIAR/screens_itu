@@ -18,6 +18,7 @@ from pychromecast.controllers.dashcast import DashCastController
 from pychromecast.generated.cast_channel_pb2 import CastMessage
 from pychromecast.models import CastInfo, HostServiceInfo
 
+from . import config_store
 from .screenshot_assets import screenshot_asset_path
 
 logger = logging.getLogger(__name__)
@@ -115,8 +116,7 @@ class CastManager:
     ):
         if config_path is None:
             config_path = str(_DEFAULT_CONFIG_PATH)
-        with open(config_path) as f:
-            cfg = json.load(f)
+        cfg = config_store.load(config_path)
 
         self.config_path: str = config_path
         if runtime_state_path is None:
@@ -125,8 +125,17 @@ class CastManager:
             )
         else:
             self.runtime_state_path = Path(runtime_state_path)
+        # config es la fuente de verdad de lo que se persiste; links/interval son
+        # las vistas calientes que lee el loop de rotacion.
+        self.config: dict = cfg
         self.links: list[dict] = cfg["links"]
         self.interval: float = cfg["default_interval_seconds"]
+        self._playlists: dict[str, Optional[list[str]]] = {
+            cc["id"]: cc.get("playlist") for cc in cfg["chromecasts"]
+        }
+        # La display page hornea esta revision al renderizar y se recarga sola
+        # cuando el poll a /api/current devuelve una distinta.
+        self.config_revision: int = 1
         self.proxy_base: str = proxy_base
         self._last_discovery_time: float = 0.0
         self._last_subnet_scan_time: float = 0.0
@@ -149,10 +158,22 @@ class CastManager:
     def _utcnow() -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    def links_for(self, cc_id: str) -> list[dict]:
+        """Links efectivos de una pantalla: su playlist, solo los habilitados.
+
+        Sin playlist configurada la pantalla rota todos los links habilitados,
+        que es como se comportaba el quiosco antes de las playlists.
+        """
+        return config_store.resolve_playlist(self.links, self._playlists.get(cc_id))
+
+    def playlist_for(self, cc_id: str) -> Optional[list[str]]:
+        return self._playlists.get(cc_id)
+
     def _current_link(self, state: CastState) -> Optional[dict]:
-        if not self.links:
+        links = self.links_for(state.id)
+        if not links:
             return None
-        return self.links[state.current_index % len(self.links)]
+        return links[state.current_index % len(links)]
 
     def _probe_link(self, url: str) -> bool:
         try:
@@ -184,15 +205,25 @@ class CastManager:
             )
         return available
 
-    def _advance_index(self, state: CastState) -> None:
-        """Avanza al siguiente link disponible; si ninguno lo esta, avanza normal."""
-        n = len(self.links)
+    def _advance_index(self, state: CastState, step_size: int = 1) -> None:
+        """Avanza al siguiente link disponible; si ninguno lo esta, avanza normal.
+
+        step_size -1 retrocede, para el boton de link anterior de la consola.
+        """
+        links = self.links_for(state.id)
+        n = len(links)
+        if not n:
+            # Un tecnico puede dejar una pantalla sin links (todos deshabilitados
+            # o playlist vacia); antes esto reventaba con division por cero.
+            state.current_index = 0
+            return
+        direction = 1 if step_size >= 0 else -1
         for step in range(1, n + 1):
-            candidate = (state.current_index + step) % n
-            if self._link_available(self.links[candidate]):
+            candidate = (state.current_index + step * direction) % n
+            if self._link_available(links[candidate]):
                 state.current_index = candidate
                 return
-        state.current_index = (state.current_index + 1) % n
+        state.current_index = (state.current_index + direction) % n
 
     def _sync_current_link_state(self, state: CastState) -> None:
         link = self._current_link(state)
@@ -372,7 +403,8 @@ class CastManager:
         state = self.states.get(cc_id)
         if not state or not state.connected:
             return False
-        for i, link in enumerate(self.links):
+        # El indice es relativo a la playlist de esta pantalla, no al catalogo.
+        for i, link in enumerate(self.links_for(cc_id)):
             if link["url"] == url:
                 state.current_index = i
                 state.current_url = url
@@ -385,7 +417,7 @@ class CastManager:
         state = self.states[cc_id]
         logger.info("Rotacion iniciada para %s", state.name)
 
-        if not self.links:
+        if not self.links_for(cc_id):
             logger.warning("Rotacion omitida para %s: no hay links configurados", state.name)
             state.rotating = False
             state.task = None
@@ -393,6 +425,14 @@ class CastManager:
 
         try:
             while state.rotating:
+                if not self.links_for(cc_id):
+                    # El tecnico dejo la pantalla sin links en caliente. No se
+                    # mata la rotacion: al rehabilitar un link se reanuda sola.
+                    state.current_url = None
+                    state.current_label = None
+                    await asyncio.sleep(self.interval)
+                    continue
+
                 if not await asyncio.to_thread(self._link_available, self._current_link(state)):
                     await asyncio.to_thread(self._advance_index, state)
                 self._sync_current_link_state(state)
@@ -429,7 +469,7 @@ class CastManager:
 
     def start_rotation(self, cc_id: str) -> bool:
         state = self.states.get(cc_id)
-        if not state or not state.connected or not self.links:
+        if not state or not state.connected or not self.links_for(cc_id):
             return False
 
         self._sync_current_link_state(state)
@@ -452,12 +492,153 @@ class CastManager:
         state.task = None
         return True
 
-    def set_interval(self, seconds: float) -> None:
-        self.interval = seconds
+    def skip(self, cc_id: str, step_size: int = 1) -> bool:
+        """Salta al link siguiente (o anterior) sin esperar el intervalo."""
+        state = self.states.get(cc_id)
+        if not state or not self.links_for(cc_id):
+            return False
+        self._advance_index(state, step_size)
+        self._sync_current_link_state(state)
+        if state.fallback_active:
+            self.cast_fallback_media(cc_id)
+        return True
+
+    # --- Mutaciones de configuracion (consola de tecnicos) ---
+
+    def _working_config(self) -> dict:
+        """Copia editable del config, con las vistas calientes ya volcadas."""
+        cfg = dict(self.config)
+        cfg["links"] = [dict(link) for link in self.links]
+        cfg["default_interval_seconds"] = self.interval
+        # Los chromecast se copian del config original a proposito: host y port
+        # pueden haber sido redescubiertos en runtime y esos no van a config.json
+        # (ver CLAUDE.md); solo la playlist se edita desde aqui.
+        cfg["chromecasts"] = [dict(cc) for cc in self.config["chromecasts"]]
+        return cfg
+
+    def _apply_config(self, cfg: dict) -> dict:
+        """Persiste cfg, adopta el resultado normalizado y sube la revision."""
+        showing = {
+            cc_id: (self._current_link(state) or {}).get("id")
+            for cc_id, state in self.states.items()
+        }
+        saved = config_store.save(self.config_path, cfg)
+
+        self.config = saved
+        self.links = saved["links"]
+        self.interval = saved["default_interval_seconds"]
+        self._playlists = {cc["id"]: cc.get("playlist") for cc in saved["chromecasts"]}
+        self.config_revision += 1
+        self._restore_indices(showing)
+        return saved
+
+    def _restore_indices(self, showing: dict[str, Optional[str]]) -> None:
+        """Deja cada pantalla en el mismo link que mostraba antes del cambio.
+
+        Sin esto, editar el ultimo link de la lista hace saltar a las pantallas
+        que estaban en cualquier otra posicion.
+        """
+        for cc_id, state in self.states.items():
+            links = self.links_for(cc_id)
+            if not links:
+                state.current_index = 0
+            else:
+                previous_id = showing.get(cc_id)
+                position = next(
+                    (i for i, link in enumerate(links) if link["id"] == previous_id), None
+                )
+                state.current_index = (
+                    position if position is not None else state.current_index % len(links)
+                )
+            self._sync_current_link_state(state)
+
+    def _find_link(self, cfg: dict, link_id: str) -> dict:
+        for link in cfg["links"]:
+            if link.get("id") == link_id:
+                return link
+        raise config_store.ConfigError(f"No existe el link '{link_id}'")
+
+    def add_link(self, payload: dict) -> dict:
+        cfg = self._working_config()
+        taken = {link["id"] for link in cfg["links"]}
+        new_link = config_store.normalize_link({**payload, "id": None}, taken)
+        cfg["links"].append(new_link)
+        saved = self._apply_config(cfg)
+        logger.info("Link agregado: %s (%s)", new_link["label"], new_link["id"])
+        return next(link for link in saved["links"] if link["id"] == new_link["id"])
+
+    def update_link(self, link_id: str, payload: dict) -> dict:
+        cfg = self._working_config()
+        current = self._find_link(cfg, link_id)
+        merged = {**current, **payload, "id": link_id}
+        # optional/direct se omiten del config cuando son falsos, asi que un
+        # merge plano no puede apagarlos: hay que borrar la clave a mano.
+        for flag in ("optional", "direct"):
+            if flag in payload and not payload[flag]:
+                merged.pop(flag, None)
+        index = cfg["links"].index(current)
+        cfg["links"][index] = config_store.normalize_link(merged)
+        saved = self._apply_config(cfg)
+        logger.info("Link actualizado: %s", link_id)
+        return next(link for link in saved["links"] if link["id"] == link_id)
+
+    def set_link_enabled(self, link_id: str, enabled: bool) -> dict:
+        return self.update_link(link_id, {"enabled": enabled})
+
+    def delete_link(self, link_id: str) -> None:
+        cfg = self._working_config()
+        current = self._find_link(cfg, link_id)
+        cfg["links"] = [link for link in cfg["links"] if link["id"] != link_id]
+        for cc in cfg["chromecasts"]:
+            if isinstance(cc.get("playlist"), list):
+                cc["playlist"] = [lid for lid in cc["playlist"] if lid != link_id]
+        self._apply_config(cfg)
+        logger.info("Link borrado: %s (%s)", current.get("label"), link_id)
+
+    def reorder_links(self, link_ids: list[str]) -> list[dict]:
+        cfg = self._working_config()
+        by_id = {link["id"]: link for link in cfg["links"]}
+        if sorted(link_ids) != sorted(by_id):
+            raise config_store.ConfigError(
+                "El nuevo orden debe incluir exactamente los links existentes"
+            )
+        cfg["links"] = [by_id[lid] for lid in link_ids]
+        saved = self._apply_config(cfg)
+        return saved["links"]
+
+    def set_playlist(self, cc_id: str, link_ids: Optional[list[str]]) -> Optional[list[str]]:
+        if cc_id not in self.states:
+            raise config_store.ConfigError(f"No existe el chromecast '{cc_id}'")
+        cfg = self._working_config()
+        for cc in cfg["chromecasts"]:
+            if cc.get("id") != cc_id:
+                continue
+            if link_ids is None:
+                cc.pop("playlist", None)
+            else:
+                cc["playlist"] = list(link_ids)
+            break
+        else:
+            raise config_store.ConfigError(f"No existe el chromecast '{cc_id}'")
+        self._apply_config(cfg)
+        logger.info("Playlist de %s actualizada: %s", cc_id, self._playlists.get(cc_id))
+        return self._playlists.get(cc_id)
+
+    def set_interval(self, seconds: float, persist: bool = True) -> float:
+        """Cambia el intervalo de rotacion. Persiste por defecto: antes se
+        perdia en cada reinicio del contenedor."""
+        seconds = config_store.validate_interval(seconds)
+        if persist:
+            cfg = self._working_config()
+            cfg["default_interval_seconds"] = seconds
+            self._apply_config(cfg)
+        else:
+            self.interval = seconds
         for cc_id, state in self.states.items():
             if state.rotating:
                 self.stop_rotation(cc_id)
                 self.start_rotation(cc_id)
+        return self.interval
 
     def _check_connection_health(self, state: CastState, timeout: float = 5) -> tuple[bool, Optional[str]]:
         if not state._chromecast or not state._dashcast:
@@ -752,11 +933,14 @@ class CastManager:
         return {
             "interval_seconds": self.interval,
             "links": self.links,
+            "config_revision": self.config_revision,
             "chromecasts": [
                 {
                     "id": s.id,
                     "name": s.name,
                     "host": s.host,
+                    "playlist": self._playlists.get(s.id),
+                    "playlist_link_ids": [link["id"] for link in self.links_for(s.id)],
                     "connected": s.connected,
                     "rotating": s.rotating,
                     "current_url": s.current_url,

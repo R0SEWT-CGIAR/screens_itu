@@ -107,7 +107,8 @@ class MainRouteTests(unittest.TestCase):
         self.assertIn(f'src="/static/screenshots/{screenshot_key}.gif?v=', html)
         self.assertIn("refreshScreenshotFrame", html)
         self.assertIn('"/static/screenshots/" + assetKey + ".gif?v=" + version', html)
-        self.assertIn('<iframe id="frame-1"', html)
+        # Los frames se keyean por id de link, no por posicion.
+        self.assertIn(f'<iframe id="frame-{main.manager.links[1]["id"]}"', html)
 
     def test_cast_display_renders_optional_direct_link_lazily(self):
         response = main.cast_display("cc1")
@@ -117,7 +118,8 @@ class MainRouteTests(unittest.TestCase):
         self.assertIn('data-lazy-src="http://172.25.19.173:3456/"', html)
         self.assertNotIn("/p/http%3A%2F%2F172.25.19.173%3A3456", html)
         # optional=True: sin precarga, el JS pone el src al mostrarlo
-        self.assertIn('<iframe id="frame-4" src="about:blank"', html)
+        optional_id = main.manager.links[4]["id"]
+        self.assertIn(f'<iframe id="frame-{optional_id}" src="about:blank"', html)
         self.assertIn('newFrame.getAttribute("data-lazy-src")', html)
 
     def test_iframe_src_direct_returns_url_as_is(self):
