@@ -11,7 +11,8 @@
 #   de su ultima IP conocida); igual se recomienda reserva DHCP.
 services:
   quiosco:
-    image: cipotato/quiosco:latest
+    image: cipotato/quiosco:0.1.4
+    init: true
     ports:
       - "8000:8000"
     environment:
@@ -20,4 +21,15 @@ services:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     restart: unless-stopped

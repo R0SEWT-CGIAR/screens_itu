@@ -33,3 +33,26 @@ class ScreenshotAssetsTests(unittest.TestCase):
         self.assertNotEqual(key_a, key_b)
         self.assertTrue(key_a.startswith("www_cgiar_org_"))
         self.assertTrue(key_b.startswith("www_cgiar_org_"))
+
+    def test_asset_paths_support_gif_and_live_png(self):
+        asset_key = "example_com_abc123def456"
+
+        self.assertEqual(
+            screenshot_assets.screenshot_asset_path_for_key(asset_key).name,
+            f"{asset_key}.gif",
+        )
+        self.assertEqual(
+            screenshot_assets.screenshot_asset_path_for_key(asset_key, "png").name,
+            f"{asset_key}.png",
+        )
+
+    def test_asset_revision_uses_requested_extension(self):
+        asset_key = "example_com_abc123def456"
+        png_path = screenshot_assets.screenshot_asset_path_for_key(asset_key, "png")
+        png_path.write_bytes(b"png")
+
+        self.assertEqual(
+            screenshot_assets.screenshot_asset_revision(asset_key, "png"),
+            png_path.stat().st_mtime_ns,
+        )
+        self.assertIsNone(screenshot_assets.screenshot_asset_revision(asset_key, "gif"))

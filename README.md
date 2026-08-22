@@ -60,11 +60,21 @@ Campos principales:
 - `chromecasts[].port`: puerto de control, normalmente `8009`
 - `chromecasts[].uuid`: identidad del dispositivo
 - `chromecasts[].resolution`: resolucion de salida
+- `chromecasts[].playlist`: ids de los links que muestra esa pantalla; sin el, muestra todos
+- `links[].id`: id estable derivado de la URL, lo asigna el servicio
 - `links[].url`: URL a mostrar
 - `links[].label`: etiqueta visible en la UI
 - `links[].zoom`: escala visual por pagina
+- `links[].enabled`: un link deshabilitado sale de la rotacion sin perder su configuracion
+- `links[].render_mode`: usar `live_screenshot` para apps que requieren Chromium moderno
 - `default_interval_seconds`: intervalo de rotacion, minimo 5 segundos
 - `screenshot_gif_duration_seconds`: duracion de GIFs generados por screenshot
+- `live_screenshot_interval_seconds`: frecuencia de PNGs en vivo; por defecto, 2 segundos
+
+La consola web (`http://<servidor>:8000/`) edita `config.json` en caliente: links,
+playlists por pantalla e intervalo. Guarda un backup en `data/config-backups/` antes de
+cada escritura. Con el servicio arriba conviene configurar desde ahi y no por SSH, porque
+el proceso tiene la configuracion en memoria y el proximo guardado sobreescribe el archivo.
 
 `PROXY_BASE` debe apuntar a una URL alcanzable desde la red de los Chromecasts:
 
@@ -113,6 +123,7 @@ Tipos de render:
 | PRTG interno (`172.25.0.22`) | `iframe` por proxy interno | `/proxy/{path}` |
 | Externa proxyable | `iframe` por proxy externo | `/p/{origin}/{path}` |
 | Externa no proxyable | `img` con GIF generado | `/static/screenshots/{asset}.gif` |
+| App con `render_mode: live_screenshot` | `img` con PNG actualizado | `/static/screenshots/{asset}.png` |
 
 Detalles estables de arquitectura:
 

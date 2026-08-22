@@ -269,10 +269,13 @@ class CastManager:
 
         try:
             cc = pychromecast.Chromecast(self._build_cast_info(state))
+            # Registrar el cliente antes de wait(): si el handshake vence o
+            # register_handler falla, _cleanup_chromecast debe poder detener
+            # su socket thread en lugar de dejarlo vivo en cada reintento.
+            state._chromecast = cc
             cc.wait(timeout=10)
             dashcast = TimedDashCastController(cc_name=state.name)
             cc.register_handler(dashcast)
-            state._chromecast = cc
             state._dashcast = dashcast
             state.connected = True
             state.display_ready = cc.app_id == DASHCAST_APP_ID
@@ -357,11 +360,12 @@ class CastManager:
             state.last_heartbeat_monotonic = time.monotonic()
 
     def _fallback_media_url(self, state: CastState) -> Optional[str]:
-        """URL del GIF de screenshot del link actual, si existe el asset."""
+        """URL del screenshot del link actual, si existe el asset."""
         link = self._current_link(state)
         if not link:
             return None
-        asset_path = screenshot_asset_path(link["url"])
+        extension = "png" if link.get("render_mode") == "live_screenshot" else "gif"
+        asset_path = screenshot_asset_path(link["url"], extension)
         try:
             revision = asset_path.stat().st_mtime_ns
         except FileNotFoundError:
@@ -389,7 +393,13 @@ class CastManager:
         logger.info("[%s] Fallback: casteando %s", state.name, media_url)
         try:
             mc = state._chromecast.media_controller
-            mc.play_media(media_url, "image/gif")
+            link = self._current_link(state)
+            content_type = (
+                "image/png"
+                if link and link.get("render_mode") == "live_screenshot"
+                else "image/gif"
+            )
+            mc.play_media(media_url, content_type)
             mc.block_until_active(timeout=10)
         except Exception as exc:
             state.last_error = f"Fallback media fallo: {exc}"
@@ -661,18 +671,29 @@ class CastManager:
             return None
 
         logger.info("Iniciando discovery mDNS buscando '%s'...", name)
+        browser = None
         try:
-            chromecasts, browser = pychromecast.get_chromecasts(timeout=8)
-            pychromecast.discovery.stop_discovery(browser)
-            self._last_discovery_time = time.monotonic()
+            cast_infos, browser = pychromecast.discovery.discover_listed_chromecasts(
+                friendly_names=[name],
+                discovery_timeout=8,
+            )
+            for cast_info in cast_infos:
+                if (
+                    cast_info.friendly_name == name
+                    and cast_info.host is not None
+                    and cast_info.port is not None
+                ):
+                    return (cast_info.host, cast_info.port)
         except Exception as exc:
             logger.error("Discovery mDNS falló: %s", exc)
-            self._last_discovery_time = time.monotonic()
             return None
-
-        for cc in chromecasts:
-            if cc.name.lower() == name.lower():
-                return (cc.cast_info.host, cc.cast_info.port)
+        finally:
+            self._last_discovery_time = time.monotonic()
+            if browser is not None:
+                try:
+                    browser.stop_discovery()
+                except Exception as exc:
+                    logger.warning("No se pudo detener discovery mDNS: %s", exc)
 
         logger.info("Discovery no encontró '%s' en la red", name)
         return None
@@ -798,7 +819,7 @@ class CastManager:
                     state.host = new_host
                     state.port = new_port
                     await asyncio.to_thread(self._persist_host_update, state)
-                    connected = await asyncio.to_thread(self._connect_state, state)
+                connected = await asyncio.to_thread(self._connect_state, state)
             if not connected:
                 state.reconnect_attempts = max(state.reconnect_attempts, 1)
                 return

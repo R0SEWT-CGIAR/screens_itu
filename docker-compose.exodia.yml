@@ -11,7 +11,8 @@
 #   reencuentra escaneando el /24 de su ultima IP conocida (>= 0.1.1).
 services:
   quiosco:
-    image: cipotato/quiosco:latest
+    image: cipotato/quiosco:0.1.4
+    init: true
     network_mode: host
     environment:
       - PROXY_BASE=${PROXY_BASE:-http://172.25.21.37:8000}
@@ -19,4 +20,18 @@ services:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots
       - ./data:/app/data
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: "4.0"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     restart: unless-stopped

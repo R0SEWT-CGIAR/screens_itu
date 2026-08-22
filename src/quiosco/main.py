@@ -17,7 +17,8 @@ from pathlib import Path
 
 from . import config_store, health
 from .cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
-from .screenshot import start_screenshot_task
+from .runtime_monitor import start_runtime_monitor_task
+from .screenshot import start_live_screenshot_task, start_screenshot_task
 from .screenshot_assets import screenshot_asset_key, screenshot_asset_revision
 
 logging.basicConfig(level=logging.INFO)
@@ -104,27 +105,10 @@ async def lifespan(app: FastAPI):
     first_state = next(iter(manager.states.values()), None)
     cast_w, cast_h = first_state.resolution if first_state else DEFAULT_RESOLUTION
     gif_duration = manager.config.get("screenshot_gif_duration_seconds", 60)
+    live_interval = manager.config.get("live_screenshot_interval_seconds", 2)
 
     def _capture_targets() -> tuple[list[str], dict[str, tuple[int, int]]]:
-        """Links que necesitan GIF, re-resueltos en cada ciclo de captura.
-
-        Capturamos las unproxyables (se muestran como screenshot) y tambien las
-        internas PRTG: esas siguen renderizando como iframe, pero su GIF sirve
-        de asset para el fallback via Default Media Receiver. Se re-resuelve en
-        cada ciclo para que un link agregado desde la consola obtenga su GIF sin
-        reiniciar el servicio.
-        """
-        links = [
-            l
-            for l in manager.links
-            if l.get("enabled", True)
-            and (_use_screenshot(l["url"]) or _is_internal_url(l["url"]))
-        ]
-        viewports = {
-            l["url"]: (int(cast_w / l.get("zoom", 1.0)), int(cast_h / l.get("zoom", 1.0)))
-            for l in links
-        }
-        return [l["url"] for l in links], viewports
+        return gif_capture_targets(manager.links, cast_w, cast_h)
 
     global recapture_queue
     recapture_queue = asyncio.Queue()
@@ -136,13 +120,32 @@ async def lifespan(app: FastAPI):
         viewport_map=initial_viewports, output_size=(cast_w, cast_h),
         link_source=_capture_targets, recapture_queue=recapture_queue,
     )
+
+    # La captura en vivo mantiene una pagina abierta por link, asi que su lista
+    # se fija al arrancar: dar de alta un link live_screenshot desde la consola
+    # todavia necesita reiniciar el servicio.
+    live_screenshot_task = None
+    live_urls, live_viewport_map = live_capture_targets(manager.links, cast_w, cast_h)
+    if live_urls:
+        live_screenshot_task = start_live_screenshot_task(
+            live_urls,
+            interval_seconds=live_interval,
+            viewport_map=live_viewport_map,
+            output_size=(cast_w, cast_h),
+        )
     watchdog_task = manager.start_watchdog_task(interval_seconds=WATCHDOG_INTERVAL_SECONDS)
+    runtime_monitor_task = start_runtime_monitor_task()
     yield
     if screenshot_task:
         screenshot_task.cancel()
         await asyncio.gather(screenshot_task, return_exceptions=True)
+    if live_screenshot_task:
+        live_screenshot_task.cancel()
+        await asyncio.gather(live_screenshot_task, return_exceptions=True)
     watchdog_task.cancel()
     await asyncio.gather(watchdog_task, return_exceptions=True)
+    runtime_monitor_task.cancel()
+    await asyncio.gather(runtime_monitor_task, return_exceptions=True)
     manager.disconnect()
     await proxy_client.aclose()
 
@@ -177,9 +180,21 @@ def current(cc_id: str):
 
     link = manager._current_link(state)
     current_url = state.current_url or (link["url"] if link else None)
-    render_mode = "screenshot" if current_url and _use_screenshot(current_url) else "iframe"
+    uses_screenshot = bool(
+        current_url
+        and (
+            (link and link.get("url") == current_url and _link_uses_screenshot(link))
+            or _use_screenshot(current_url)
+        )
+    )
+    render_mode = "screenshot" if uses_screenshot else "iframe"
+    asset_extension = (
+        _screenshot_extension(link)
+        if uses_screenshot and link and link.get("url") == current_url
+        else ("gif" if uses_screenshot else None)
+    )
     asset_key = screenshot_asset_key(current_url) if render_mode == "screenshot" and current_url else None
-    asset_revision = screenshot_asset_revision(asset_key)
+    asset_revision = screenshot_asset_revision(asset_key, asset_extension or "gif")
     return {
         "index": state.current_index,
         # La display page keyea sus frames por id de link y se recarga sola
@@ -190,6 +205,7 @@ def current(cc_id: str):
         "current_url": current_url,
         "render_mode": render_mode,
         "asset_key": asset_key,
+        "asset_extension": asset_extension,
         "asset_revision": asset_revision,
     }
 
@@ -240,6 +256,7 @@ class LinkCreate(BaseModel):
     optional: bool = False
     direct: bool = False
     enabled: bool = True
+    render_mode: str = config_store.DEFAULT_RENDER_MODE
 
 
 class LinkUpdate(BaseModel):
@@ -249,6 +266,7 @@ class LinkUpdate(BaseModel):
     optional: Optional[bool] = None
     direct: Optional[bool] = None
     enabled: Optional[bool] = None
+    render_mode: Optional[str] = None
 
 
 class LinkOrderRequest(BaseModel):
@@ -363,6 +381,55 @@ def _use_screenshot(url: str) -> bool:
     return any(host in parsed.netloc for host in SCREENSHOT_SITES)
 
 
+def _is_live_screenshot(link: dict) -> bool:
+    return link.get("render_mode") == "live_screenshot"
+
+
+def _link_uses_screenshot(link: dict) -> bool:
+    return _is_live_screenshot(link) or _use_screenshot(link["url"])
+
+
+def _screenshot_extension(link: dict) -> str:
+    return "png" if _is_live_screenshot(link) else "gif"
+
+
+def _viewport_map(links: list[dict], cast_w: int, cast_h: int) -> dict[str, tuple[int, int]]:
+    return {
+        l["url"]: (int(cast_w / l.get("zoom", 1.0)), int(cast_h / l.get("zoom", 1.0)))
+        for l in links
+    }
+
+
+def gif_capture_targets(
+    links: list[dict], cast_w: int, cast_h: int
+) -> tuple[list[str], dict[str, tuple[int, int]]]:
+    """Links que necesitan GIF, re-resueltos en cada ciclo de captura.
+
+    Capturamos las unproxyables (se muestran como screenshot) y tambien las
+    internas PRTG: esas siguen renderizando como iframe, pero su GIF sirve de
+    asset para el fallback via Default Media Receiver. Se re-resuelve en cada
+    ciclo para que un link agregado desde la consola obtenga su GIF sin
+    reiniciar el servicio. Los de captura en vivo quedan fuera: esos los atiende
+    el loop de PNG, que mantiene su propia pagina abierta.
+    """
+    selected = [
+        l
+        for l in links
+        if l.get("enabled", True)
+        and not _is_live_screenshot(l)
+        and (_use_screenshot(l["url"]) or _is_internal_url(l["url"]))
+    ]
+    return [l["url"] for l in selected], _viewport_map(selected, cast_w, cast_h)
+
+
+def live_capture_targets(
+    links: list[dict], cast_w: int, cast_h: int
+) -> tuple[list[str], dict[str, tuple[int, int]]]:
+    """Links de captura en vivo. Se resuelven una sola vez, al arrancar."""
+    selected = [l for l in links if l.get("enabled", True) and _is_live_screenshot(l)]
+    return [l["url"] for l in selected], _viewport_map(selected, cast_w, cast_h)
+
+
 def _is_internal_url(url: str) -> bool:
     parsed = urlparse(url)
     return PRTG_HOST in parsed.netloc
@@ -425,15 +492,17 @@ def cast_display(cc_id: str = "cc1"):
         # Scale para encajar en el cast
         sx = cast_w / vw
         sy = cast_h / vh
-        if _use_screenshot(url):
+        if _link_uses_screenshot(link):
             asset_key = screenshot_asset_key(url)
-            # src precargado: el Chromecast descarga y decodifica el GIF al cargar
-            # la pagina, no en frio durante su slot de rotacion (quiosco-av6)
-            asset_revision = screenshot_asset_revision(asset_key)
+            asset_extension = _screenshot_extension(link)
+            # src precargado: el Chromecast descarga y decodifica el asset al
+            # cargar la pagina, no en frio durante su slot de rotacion (quiosco-av6)
+            asset_revision = screenshot_asset_revision(asset_key, asset_extension)
             asset_version = asset_revision if asset_revision is not None else "pending"
-            src = f"/static/screenshots/{asset_key}.gif?v={asset_version}"
+            src = f"/static/screenshots/{asset_key}.{asset_extension}?v={asset_version}"
             iframes_html += (
-                f'  <img id="frame-{frame_id}" data-asset-key="{asset_key}" src="{src}"'
+                f'  <img id="frame-{frame_id}" data-asset-key="{asset_key}"'
+                f' data-asset-extension="{asset_extension}" src="{src}"'
                 f' class="frame screenshot-frame" style="display:none;'
                 f' width:{vw}px; height:{vh}px;'
                 f' transform:scale({sx},{sy}); transform-origin:top left;'
@@ -492,16 +561,18 @@ def cast_display(cc_id: str = "cc1"):
   var configRevision = {config_revision};
   var currentLinkId = null;
   var currentAssetKey = null;
+  var currentAssetExtension = null;
   var currentAssetRevision = null;
 
-  function screenshotSrc(assetKey, assetRevision) {{
+  function screenshotSrc(assetKey, assetRevision, assetExtension) {{
     var version = assetRevision || "pending";
-    return "/static/screenshots/" + assetKey + ".gif?v=" + version;
+    var extension = assetExtension || "gif";
+    return "/static/screenshots/" + assetKey + "." + extension + "?v=" + version;
   }}
 
-  function refreshScreenshotFrame(frame, assetKey, assetRevision) {{
+  function refreshScreenshotFrame(frame, assetKey, assetRevision, assetExtension) {{
     if (!frame || !assetKey) return;
-    var nextSrc = screenshotSrc(assetKey, assetRevision);
+    var nextSrc = screenshotSrc(assetKey, assetRevision, assetExtension);
     if (frame.getAttribute("src") !== nextSrc) {{
       frame.setAttribute("src", nextSrc);
     }}
@@ -538,24 +609,34 @@ def cast_display(cc_id: str = "cc1"):
             newFrame.setAttribute("src", newFrame.getAttribute("data-lazy-src"));
           }}
           if (data.render_mode === "screenshot") {{
-            refreshScreenshotFrame(newFrame, data.asset_key, data.asset_revision);
+            refreshScreenshotFrame(
+              newFrame, data.asset_key, data.asset_revision, data.asset_extension
+            );
             currentAssetKey = data.asset_key;
+            currentAssetExtension = data.asset_extension;
             currentAssetRevision = data.asset_revision;
           }} else {{
             currentAssetKey = null;
+            currentAssetExtension = null;
             currentAssetRevision = null;
           }}
           if (newFrame) newFrame.style.display = "block";
         }} else if (
           data.render_mode === "screenshot" &&
-          (data.asset_key !== currentAssetKey || data.asset_revision !== currentAssetRevision)
+          (data.asset_key !== currentAssetKey ||
+           data.asset_extension !== currentAssetExtension ||
+           data.asset_revision !== currentAssetRevision)
         ) {{
           var curFrame = document.getElementById("frame-" + currentLinkId);
-          refreshScreenshotFrame(curFrame, data.asset_key, data.asset_revision);
+          refreshScreenshotFrame(
+            curFrame, data.asset_key, data.asset_revision, data.asset_extension
+          );
           currentAssetKey = data.asset_key;
+          currentAssetExtension = data.asset_extension;
           currentAssetRevision = data.asset_revision;
         }} else if (data.render_mode !== "screenshot") {{
           currentAssetKey = null;
+          currentAssetExtension = null;
           currentAssetRevision = null;
         }}
       }} catch (e) {{
@@ -612,11 +693,12 @@ def cast_startup_check(cc_id: str = "cc1"):
         vh = int(cast_h / zoom)
         sx = cast_w / vw
         sy = cast_h / vh
-        if _use_screenshot(url):
+        if _link_uses_screenshot(link):
             asset_key = screenshot_asset_key(url)
-            asset_revision = screenshot_asset_revision(asset_key)
+            asset_extension = _screenshot_extension(link)
+            asset_revision = screenshot_asset_revision(asset_key, asset_extension)
             asset_version = asset_revision if asset_revision is not None else "pending"
-            src = f"/static/screenshots/{asset_key}.gif?v={asset_version}"
+            src = f"/static/screenshots/{asset_key}.{asset_extension}?v={asset_version}"
             frames_html += (
                 f'  <img id="startup-frame-{i}" src="{src}"'
                 f' class="frame" style="display:none;'

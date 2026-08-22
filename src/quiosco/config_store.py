@@ -24,6 +24,10 @@ MIN_INTERVAL_SECONDS = 5
 MIN_ZOOM = 0.1
 MAX_ZOOM = 4.0
 ALLOWED_SCHEMES = ("http", "https")
+# iframe es el modo por defecto; live_screenshot publica un PNG que se refresca
+# cada pocos segundos, para paginas que no se dejan enmarcar ni sirven de GIF.
+DEFAULT_RENDER_MODE = "iframe"
+ALLOWED_RENDER_MODES = (DEFAULT_RENDER_MODE, "live_screenshot")
 
 
 class ConfigError(ValueError):
@@ -80,6 +84,15 @@ def normalize_link(raw: dict, taken: Optional[set[str]] = None) -> dict:
         link["optional"] = True
     if raw.get("direct"):
         link["direct"] = True
+    render_mode = str(raw.get("render_mode") or "").strip() or DEFAULT_RENDER_MODE
+    if render_mode not in ALLOWED_RENDER_MODES:
+        raise ConfigError(
+            f"El modo de render '{render_mode}' no existe; usar uno de: "
+            + ", ".join(ALLOWED_RENDER_MODES)
+        )
+    # Igual que optional/direct: solo se escribe cuando no es el valor por defecto.
+    if render_mode != DEFAULT_RENDER_MODE:
+        link["render_mode"] = render_mode
     link["enabled"] = bool(raw.get("enabled", True))
     return link
 

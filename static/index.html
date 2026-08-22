@@ -134,6 +134,7 @@
       letter-spacing: 0.03em;
     }
     .badge.gif { color: #c4b5fd; border-color: #4c1d95; }
+    .badge.live { color: #6ee7b7; border-color: #065f46; }
     .badge.off { color: #fca5a5; border-color: #7f1d1d; }
     .link-actions { display: flex; gap: 5px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 340px; }
 
@@ -144,7 +145,7 @@
       margin-bottom: 10px;
     }
     .field label { display: block; font-size: 0.7rem; color: #94a3b8; margin-bottom: 4px; }
-    .field input[type=text], .field input[type=number] {
+    .field input[type=text], .field input[type=number], .field select {
       width: 100%;
       background: #0f172a;
       border: 1px solid #334155;
@@ -154,7 +155,7 @@
       font-size: 0.82rem;
       font-family: inherit;
     }
-    .field input:focus { outline: none; border-color: #3b82f6; }
+    .field input:focus, .field select:focus { outline: none; border-color: #3b82f6; }
     .checks { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
     .checks label { font-size: 0.78rem; color: #cbd5e1; display: flex; align-items: center; gap: 6px; cursor: pointer; }
     .checks input[type=checkbox] { accent-color: #3b82f6; width: 15px; height: 15px; cursor: pointer; }
@@ -475,7 +476,8 @@
             ${link.zoom !== 1 ? `<span class="badge">zoom ${esc(link.zoom)}</span>` : ''}
             ${link.optional ? '<span class="badge">Opcional</span>' : ''}
             ${link.direct ? '<span class="badge">Directo</span>' : ''}
-            ${usesGif(link.url) ? '<span class="badge gif">GIF</span>' : ''}
+            ${isLive(link) ? '<span class="badge live">En vivo</span>' : ''}
+            ${!isLive(link) && usesGif(link.url) ? '<span class="badge gif">GIF</span>' : ''}
           </div>
         </div>
         <div class="link-actions">
@@ -488,7 +490,7 @@
           <button class="btn btn-ghost btn-sm" onclick="toggleEnabled('${esc(link.id)}',${!link.enabled})">
             ${link.enabled ? 'Deshabilitar' : 'Habilitar'}
           </button>
-          ${usesGif(link.url)
+          ${!isLive(link) && usesGif(link.url)
             ? `<button class="btn btn-ghost btn-sm" onclick="recapture('${esc(link.id)}')"
                  title="Recapturar el GIF ahora, sin esperar el ciclo de 5 min">&#8635; GIF</button>`
             : ''}
@@ -507,12 +509,16 @@
     return GIF_HOSTS.some(host => String(url).includes(host));
   }
 
+  function isLive(link) {
+    return link && link.render_mode === 'live_screenshot';
+  }
+
   function shortName(name) {
     return String(name).replace('ITU ', '').replace('ITU_', '');
   }
 
   function linkForm(link) {
-    const l = link || { id: '', url: '', label: '', zoom: 1, optional: false, direct: false, enabled: true };
+    const l = link || { id: '', url: '', label: '', zoom: 1, optional: false, direct: false, enabled: true, render_mode: 'iframe' };
     const isNew = !link;
     const prefix = isNew ? 'new' : 'edit';
     return `
@@ -530,6 +536,13 @@
             <label>Zoom (0.1 a 4)</label>
             <input type="number" id="${prefix}-zoom" value="${esc(l.zoom)}" step="0.1" min="0.1" max="4">
           </div>
+          <div class="field">
+            <label>Como se muestra</label>
+            <select id="${prefix}-render-mode">
+              <option value="iframe" ${isLive(l) ? '' : 'selected'}>Pagina embebida</option>
+              <option value="live_screenshot" ${isLive(l) ? 'selected' : ''}>Captura en vivo</option>
+            </select>
+          </div>
         </div>
         <div class="checks">
           <label><input type="checkbox" id="${prefix}-optional" ${l.optional ? 'checked' : ''}> Opcional</label>
@@ -540,6 +553,9 @@
           <strong>Opcional</strong>: si no responde se salta en la rotacion en vez de mostrar un error.
           <strong>Directo</strong>: se carga sin pasar por el proxy, para apps de la misma red que los Chromecasts.
           <strong>Zoom</strong> menor a 1 muestra mas contenido en pantalla.
+          <strong>Captura en vivo</strong>: para paginas que no se dejan embeber; se publica un PNG
+          que se refresca cada pocos segundos. Al pasar un link a este modo hay que reiniciar el
+          servicio para que arranque su captura.
         </div>
         <div class="btn-row">
           <button class="btn btn-primary" onclick="${isNew ? 'submitNewLink()' : `saveLink('${esc(l.id)}')`}">Guardar</button>
@@ -555,7 +571,8 @@
       zoom: parseFloat(document.getElementById(prefix + '-zoom').value),
       optional: document.getElementById(prefix + '-optional').checked,
       direct: document.getElementById(prefix + '-direct').checked,
-      enabled: document.getElementById(prefix + '-enabled').checked
+      enabled: document.getElementById(prefix + '-enabled').checked,
+      render_mode: document.getElementById(prefix + '-render-mode').value
     };
   }
 

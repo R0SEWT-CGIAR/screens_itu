@@ -38,6 +38,12 @@ def write_config(config_path: Path) -> None:
                         "optional": True,
                         "direct": True,
                     },
+                    {
+                        "url": "http://172.25.21.37:3456/",
+                        "label": "Suite en vivo",
+                        "optional": True,
+                        "render_mode": "live_screenshot",
+                    },
                 ],
                 "default_interval_seconds": 30,
             }
@@ -79,6 +85,7 @@ class MainRouteTests(unittest.TestCase):
         self.assertEqual(payload["current_url"], main.manager.links[0]["url"])
         self.assertEqual(payload["render_mode"], "screenshot")
         self.assertEqual(payload["asset_key"], asset_key)
+        self.assertEqual(payload["asset_extension"], "gif")
         self.assertEqual(payload["asset_revision"], expected_revision)
 
     def test_current_returns_iframe_metadata(self):
@@ -92,6 +99,22 @@ class MainRouteTests(unittest.TestCase):
         self.assertEqual(payload["render_mode"], "iframe")
         self.assertIsNone(payload["asset_key"])
         self.assertIsNone(payload["asset_revision"])
+        self.assertIsNone(payload["asset_extension"])
+
+    def test_current_returns_live_screenshot_png_metadata(self):
+        state = main.manager.states["cc1"]
+        state.current_index = 5
+        link = main.manager.links[5]
+        asset_key = screenshot_assets.screenshot_asset_key(link["url"])
+        asset_path = screenshot_assets.screenshot_asset_path_for_key(asset_key, "png")
+        asset_path.write_bytes(b"png")
+
+        payload = main.current("cc1")
+
+        self.assertEqual(payload["render_mode"], "screenshot")
+        self.assertEqual(payload["asset_key"], asset_key)
+        self.assertEqual(payload["asset_extension"], "png")
+        self.assertEqual(payload["asset_revision"], asset_path.stat().st_mtime_ns)
 
     def test_uptime_robot_uses_screenshot_mode(self):
         url = "https://stats.uptimerobot.com/26r4CjSckG"
@@ -106,7 +129,10 @@ class MainRouteTests(unittest.TestCase):
         self.assertIn(f'data-asset-key="{screenshot_key}"', html)
         self.assertIn(f'src="/static/screenshots/{screenshot_key}.gif?v=', html)
         self.assertIn("refreshScreenshotFrame", html)
-        self.assertIn('"/static/screenshots/" + assetKey + ".gif?v=" + version', html)
+        self.assertIn(
+            '"/static/screenshots/" + assetKey + "." + extension + "?v=" + version',
+            html,
+        )
         # Los frames se keyean por id de link, no por posicion.
         self.assertIn(f'<iframe id="frame-{main.manager.links[1]["id"]}"', html)
 
@@ -121,6 +147,18 @@ class MainRouteTests(unittest.TestCase):
         optional_id = main.manager.links[4]["id"]
         self.assertIn(f'<iframe id="frame-{optional_id}" src="about:blank"', html)
         self.assertIn('newFrame.getAttribute("data-lazy-src")', html)
+
+    def test_cast_display_renders_live_screenshot_as_refreshable_png(self):
+        response = main.cast_display("cc1")
+        html = response.body.decode("utf-8")
+        link = main.manager.links[5]
+        asset_key = screenshot_assets.screenshot_asset_key(link["url"])
+
+        self.assertIn(f'data-asset-key="{asset_key}"', html)
+        self.assertIn('data-asset-extension="png"', html)
+        self.assertIn(f'src="/static/screenshots/{asset_key}.png?v=', html)
+        self.assertNotIn('<iframe id="frame-5"', html)
+        self.assertIn("assetExtension || \"gif\"", html)
 
     def test_iframe_src_direct_returns_url_as_is(self):
         self.assertEqual(
@@ -153,5 +191,8 @@ class MainRouteTests(unittest.TestCase):
         self.assertIn("Iframe", html)
         self.assertIn("Internal 1", html)
         self.assertIn("Internal 2", html)
+        live_key = screenshot_assets.screenshot_asset_key(main.manager.links[5]["url"])
+        self.assertIn(f"/static/screenshots/{live_key}.png?v=", html)
+        self.assertIn("Suite en vivo", html)
         self.assertNotIn("/api/current/", html)
         self.assertNotIn("startup-check-complete", html)

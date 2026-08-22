@@ -81,7 +81,8 @@ Ejemplo minimo:
     }
   ],
   "default_interval_seconds": 5,
-  "screenshot_gif_duration_seconds": 15
+  "screenshot_gif_duration_seconds": 15,
+  "live_screenshot_interval_seconds": 2
 }
 ```
 
@@ -103,8 +104,10 @@ Campos principales:
 | `links[].enabled` | No | `true` | En `false` el link sale de la rotacion de todas las pantallas sin perder su configuracion |
 | `links[].optional` | No | `false` | El servidor chequea disponibilidad (GET, cache 30s) y la rotacion salta el link si esta caido. Para servicios intermitentes (p.ej. una app en la laptop de un operador) |
 | `links[].direct` | No | `false` | El iframe carga la URL tal cual, sin proxy `/p/`. Para apps en la misma red que los Chromecasts (SPA con websockets que el proxy no soporta) |
+| `links[].render_mode` | No | automatico | Con `live_screenshot`, Chromium mantiene la pagina abierta y publica PNGs compatibles con el Chromecast. Util para canvas o APIs web que el receiver no renderiza |
 | `default_interval_seconds` | Si | - | Intervalo de rotacion, minimo 5s |
 | `screenshot_gif_duration_seconds` | No | `60` | Duracion del GIF por URL screenshot |
+| `live_screenshot_interval_seconds` | No | `2` | Segundos entre PNGs del modo `live_screenshot` |
 
 ### 4. Verificar instalacion local
 
@@ -241,7 +244,7 @@ Igual que la Opcion E pero en Linux, donde si existe `network_mode: host`. Es el
 2. Crear una carpeta de despliegue (p.ej. `~/quiosco/`) con:
    - `docker-compose.exodia.yml` (de este repo; renombrable a `docker-compose.yml`)
    - `config.json` (IPs/UUIDs de los Chromecasts y links)
-   - `static/screenshots/` con los GIFs seed (opcional; se regeneran solos)
+   - `static/screenshots/` con los GIFs o PNGs seed (opcional; se regeneran solos)
 3. Arrancar:
 
 ```bash
@@ -249,7 +252,9 @@ cd ~/quiosco
 docker compose up -d
 ```
 
-4. Si `ufw` esta activo, permitir el puerto 8000 entrante (`sudo ufw allow 8000/tcp`) cuando los Chromecasts no carguen la display page.
+4. Conservar `init: true` en el servicio `quiosco`. Playwright crea subprocesos de Chromium y el init del contenedor actua como subreaper para que los procesos terminados no se acumulen como zombis.
+5. Conservar tambien los guardrails de produccion: `pids_limit: 512`, `mem_limit: 2g`, `cpus: "4.0"`, healthcheck HTTP y rotacion de logs (`10m`, 5 archivos). Los limites dejan margen sobre el soak observado (pico de 102 PIDs y ~1 GiB durante capturas) y contienen una regresion antes de que afecte al host.
+6. Si `ufw` esta activo, permitir el puerto 8000 entrante (`sudo ufw allow 8000/tcp`) cuando los Chromecasts no carguen la display page.
 
 Para actualizar a una nueva version de la imagen:
 
@@ -259,6 +264,19 @@ docker compose up -d
 ```
 
 Tras cada reinicio del contenedor la rotacion arranca detenida: iniciar cada Chromecast desde la UI o con `POST /api/chromecasts/<id>/start`.
+
+### Guardrails y rollback en Exodia
+
+El healthcheck consulta `GET /api/status` cada 30 segundos. Ver su resultado y los limites efectivos:
+
+```bash
+docker inspect --format '{{json .State.Health}}' quiosco-quiosco-1
+docker inspect --format 'pids={{.HostConfig.PidsLimit}} memory={{.HostConfig.Memory}} nano_cpus={{.HostConfig.NanoCpus}}' quiosco-quiosco-1
+```
+
+Docker marca el contenedor como `unhealthy`, pero `restart: unless-stopped` no lo reinicia solo por ese estado. Antes de recrearlo, revisar `runtime_resources`, errores de Chromium y conectividad a los Chromecast.
+
+La rotacion `json-file` conserva como maximo cinco archivos de 10 MiB. Para rollback de los guardrails, restaurar el Compose respaldado antes del despliegue y ejecutar `docker compose up -d`; documentar el motivo y no elevar limites sin evidencia de un pico legitimo.
 
 ### Checklist posterior al despliegue
 
@@ -310,13 +328,17 @@ Por pantalla:
 
 Sobre los links:
 
-- Agregar, editar (URL, nombre, zoom, opcional, directo) y borrar.
+- Agregar, editar (URL, nombre, zoom, opcional, directo, como se muestra) y borrar.
 - Reordenar con las flechas.
 - Habilitar / deshabilitar: un link deshabilitado sale de la rotacion de todas las
   pantallas sin perder su configuracion. Es la accion correcta cuando una pagina esta
   caida o mal configurada y no se quiere borrar el link.
 - `GIF`: recaptura el screenshot de ese link ahora, sin esperar el ciclo de 5 minutos.
   Solo aparece en links que usan GIF (externas no proxyables e internas PRTG).
+- `Como se muestra`: `Pagina embebida` es lo normal; `Captura en vivo` publica un PNG que
+  se refresca cada pocos segundos, para apps que no se dejan embeber. El link queda
+  marcado `En vivo` y deja de usar GIF. Es el unico cambio de link que todavia necesita
+  reiniciar el servicio (ver mas abajo).
 - Castear un link puntual a una pantalla.
 
 Global:
@@ -382,6 +404,8 @@ docker compose down
 | Dashboard PRTG en blanco | Falla de acceso a `172.25.0.22` o proxy | Ejecutar `Debug interno`, validar alcance a PRTG desde servidor | PRTG responde en red pero no renderiza via Quiosco |
 | Sitio externo no carga en iframe | Restricciones `X-Frame-Options`, Cloudflare o CSP | Confirmar si esta en modo screenshot; evaluar reemplazo de URL | El sitio es critico y no existe alternativa |
 | GIF de screenshot no cambia | Falla de captura Playwright, timeout o Chromium ausente | Pulsar `GIF` en ese link para recapturar y mirar los logs; comprobar `uv run playwright install chromium` local o imagen Docker actualizada | Falla continua en varios ciclos de captura |
+| PNG en vivo no cambia | La URL `live_screenshot` no responde o la sesion persistente de Chromium fallo | Revisar logs `Live PNG capture`, alcanzar la URL desde el contenedor y comprobar el mtime del PNG | No se regenera despues de reiniciar el servicio |
+| API no responde y aumenta la carga/PIDs | Fuga de procesos Chromium o clientes pychromecast | Revisar `runtime_resources` y healthcheck; reiniciar solo `quiosco` si esta degradado; confirmar `init: true` y los limites de Compose | Los hilos/PIDs no vuelven al baseline despues de dos ciclos completos de capturas |
 | Una pagina esta caida y ensucia la rotacion | La URL responde error o quedo mal configurada | Deshabilitar ese link desde la consola; sale de todas las pantallas sin perder su configuracion | La pagina es critica y no hay reemplazo |
 | Pantalla en negro con "Pantalla sin links configurados" | Su playlist quedo vacia o todos sus links estan deshabilitados | En la tarjeta de esa pantalla, `Elegir links` y marcar alguno, o `Usar todos` | — |
 | Un cambio hecho en la consola no se ve en la pantalla | La display page no esta haciendo su poll de 2s | Revisar el diagnostico de esa tarjeta; si dice que DashCast corre pero la pagina no carga, es `PROXY_BASE`. `Relanzar` fuerza la recarga | El relanzado no la recupera |
@@ -413,6 +437,17 @@ Logs:
 docker compose logs -f quiosco
 ```
 
+El servicio registra cada cinco minutos una linea `runtime_resources` con los
+hilos de Uvicorn, memoria RSS, PIDs y memoria del cgroup, procesos totales,
+zombis y procesos Chromium. El estado sube de `INFO status=ok` a
+`WARNING status=warning` cuando detecta zombis o cruza un umbral preventivo.
+
+Filtrar las muestras recientes:
+
+```bash
+docker compose logs --since=1h quiosco | grep runtime_resources
+```
+
 ### Criterios de escalamiento tecnico
 
 Escalar al equipo de desarrollo cuando:
@@ -432,8 +467,9 @@ Escalar al equipo de desarrollo cuando:
 | Interna PRTG | Host `172.25.0.22` | `iframe` | `/proxy/{path}` |
 | Externa proxyable | URL fuera de PRTG y fuera de lista screenshot | `iframe` | `/p/{origin_encoded}/{path}` |
 | Externa no proxyable | Host en `SCREENSHOT_SITES` | `img` con GIF | `/static/screenshots/{asset}.gif` |
+| App moderna/canvas | `links[].render_mode = live_screenshot` | `img` con PNG renovado | `/static/screenshots/{asset}.png` |
 
-La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py`. Cualquier cambio requiere reiniciar la app.
+La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py`. El modo se elige por link desde la consola (`Como se muestra`) o a mano en `config.json`. En modo `live_screenshot`, Chromium conserva la pagina y su WebSocket abiertos; cada captura se publica de forma atomica y la display page la solicita con una revision nueva en su poll de 2s. Alta o baja de este modo requiere reiniciar la app.
 
 ### Flujo de casting
 
@@ -456,7 +492,7 @@ La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py`. Cualquier cambio requ
 
 Cuando DashCast falla 3 veces seguidas tras la gracia (`FALLBACK_AFTER_FAILURES`, p.ej. `CAST_INIT_TIMEOUT` como en el incidente del 2026-05-18), el watchdog activa modo fallback:
 
-- La rotacion castea el GIF de screenshot del link actual con el Default Media Receiver (`CC1AD845`), que es el receiver oficial de Google y no depende del receiver de DashCast.
+- La rotacion castea el screenshot del link actual (GIF o PNG en vivo) con el Default Media Receiver (`CC1AD845`), que es el receiver oficial de Google y no depende del receiver de DashCast.
 - Para que el fallback cubra tambien los dashboards PRTG, el ciclo de captura de GIFs incluye las URLs internas (con bypass de certificado); esos GIFs solo se usan como asset de respaldo, el modo normal sigue siendo iframe.
 - Cada 5 min (`FALLBACK_DASHCAST_RETRY_SECONDS`) reintenta DashCast; sale del fallback solo cuando la display page vuelve a latir (heartbeat posterior al relanzamiento), no basta con que la app DashCast corra.
 - `GET /api/status` expone `fallback_active` y `dashcast_failures` por Chromecast.
@@ -510,6 +546,9 @@ Siguen requiriendo reinicio (`docker compose down` + `docker compose up -d --bui
 - Alta o baja de un Chromecast, y cambios de su nombre, uuid o resolucion.
 - `PROXY_BASE`.
 - Lista `SCREENSHOT_SITES` (esta en el codigo, no en `config.json`).
+- Pasar un link a `Captura en vivo` (o sacarlo de ese modo): el loop de PNG mantiene una
+  pagina de Chromium abierta por link y fija su lista al arrancar. El modo queda guardado
+  en `config.json` al instante; lo que espera al reinicio es que arranque su captura.
 - Dependencias de captura Playwright/Chromium.
 
 Editar `config.json` a mano mientras el servicio corre es riesgoso: el proceso tiene la

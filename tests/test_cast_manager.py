@@ -33,6 +33,7 @@ class FakeChromecast:
         self.socket_client = SimpleNamespace(is_connected=is_connected)
         self.media_controller = FakeMediaController()
         self.disconnected = False
+        self.disconnect_calls = 0
 
     @property
     def app_id(self):
@@ -43,6 +44,20 @@ class FakeChromecast:
 
     def disconnect(self, timeout=None):
         self.disconnected = True
+        self.disconnect_calls += 1
+
+
+class FailingWaitChromecast(FakeChromecast):
+    def wait(self, timeout=None):
+        raise TimeoutError("wait expired")
+
+
+class FakeDiscoveryBrowser:
+    def __init__(self):
+        self.stop_calls = 0
+
+    def stop_discovery(self):
+        self.stop_calls += 1
 
 
 def write_config(config_path: Path) -> None:
@@ -111,6 +126,34 @@ class CastManagerRuntimeStateTests(unittest.TestCase):
         manager = CastManager(config_path=str(self.config_path), proxy_base="http://testserver")
 
         self.assertEqual(manager.states["cc1"].host, "127.0.0.1")
+
+
+class CastManagerConnectionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        config_path = Path(self.tmpdir.name) / "config.json"
+        write_config(config_path)
+        self.manager = CastManager(config_path=str(config_path), proxy_base="http://testserver")
+        self.state = self.manager.states["cc1"]
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
+
+    def test_connect_timeout_disconnects_partial_client(self):
+        failed_client = FailingWaitChromecast()
+
+        with patch(
+            "quiosco.cast_manager.pychromecast.Chromecast",
+            return_value=failed_client,
+        ):
+            result = self.manager._connect_state(self.state)
+
+        self.assertFalse(result)
+        self.assertEqual(failed_client.disconnect_calls, 1)
+        self.assertIsNone(self.state._chromecast)
+        self.assertIsNone(self.state._dashcast)
+        self.assertFalse(self.state.connected)
+        self.assertEqual(self.state.last_error, "wait expired")
 
 
 class CastManagerOptionalLinksTests(unittest.TestCase):
@@ -196,6 +239,39 @@ class CastManagerSubnetScanTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.tmpdir.cleanup()
 
+    def test_mdns_discovery_uses_metadata_and_stops_browser(self):
+        browser = FakeDiscoveryBrowser()
+        cast_info = SimpleNamespace(
+            friendly_name="Test Chromecast",
+            host="10.0.0.54",
+            port=8009,
+        )
+
+        with patch(
+            "quiosco.cast_manager.pychromecast.discovery.discover_listed_chromecasts",
+            return_value=([cast_info], browser),
+        ) as discover:
+            result = self.manager._discover_by_name("Test Chromecast")
+
+        self.assertEqual(result, ("10.0.0.54", 8009))
+        self.assertEqual(browser.stop_calls, 1)
+        discover.assert_called_once_with(
+            friendly_names=["Test Chromecast"],
+            discovery_timeout=8,
+        )
+
+    def test_mdns_discovery_failure_enters_cooldown(self):
+        with patch(
+            "quiosco.cast_manager.pychromecast.discovery.discover_listed_chromecasts",
+            side_effect=RuntimeError("mDNS unavailable"),
+        ) as discover:
+            first = self.manager._discover_by_name("Test Chromecast")
+            second = self.manager._discover_by_name("Test Chromecast")
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(discover.call_count, 1)
+
     def test_scan_finds_device_by_name_on_new_ip(self):
         self.manager._probe_cast_port = lambda host, port: host == "10.0.0.54"
         self.manager._device_name = lambda host: "Test Chromecast"
@@ -261,6 +337,29 @@ class CastManagerSubnetScanTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connect_hosts, ["127.0.0.1", "10.0.0.54"])
         saved = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["chromecasts"]["cc1"], {"host": "10.0.0.54", "port": 8009})
+
+    async def test_recover_retries_connection_when_mdns_finds_same_endpoint(self):
+        connect_results = iter((False, True))
+        connect_hosts = []
+
+        def fake_connect(state):
+            connect_hosts.append((state.host, state.port))
+            state.connected = next(connect_results)
+            return state.connected
+
+        self.manager._connect_state = fake_connect
+        self.manager._discover_by_name = lambda name: ("127.0.0.1", 8009)
+        self.manager._scan_subnet_for_device = lambda *args: self.fail(
+            "No debe escanear la subred si mDNS encontro el dispositivo"
+        )
+
+        await self.manager._recover_state(self.state, "Socket desconectado")
+
+        self.assertTrue(self.state.connected)
+        self.assertEqual(
+            connect_hosts,
+            [("127.0.0.1", 8009), ("127.0.0.1", 8009)],
+        )
 
 
 class CastManagerWatchdogTests(unittest.IsolatedAsyncioTestCase):
@@ -533,6 +632,22 @@ class CastManagerFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result)
         self.assertEqual(self.state._chromecast.media_controller.played, [])
+
+    async def test_live_screenshot_fallback_uses_png_content_type(self):
+        self.state.connected = True
+        self.state._chromecast = FakeChromecast(is_connected=True)
+        self.manager.links[0]["render_mode"] = "live_screenshot"
+        live_asset = Path(self.tmpdir.name) / "agents.png"
+        live_asset.write_bytes(b"png")
+
+        with patch("quiosco.cast_manager.screenshot_asset_path", return_value=live_asset) as path:
+            result = self.manager.cast_fallback_media("cc1")
+
+        self.assertTrue(result)
+        path.assert_called_once_with(self.manager.links[0]["url"], "png")
+        [(url, content_type)] = self.state._chromecast.media_controller.played
+        self.assertEqual(content_type, "image/png")
+        self.assertIn(live_asset.name, url)
 
 
 class CastManagerHeartbeatTests(unittest.IsolatedAsyncioTestCase):
