@@ -1,0 +1,10 @@
+[Unit]
+# Apagado del quiosco por horario. El guard de sesion vive en el script: si hay
+# una sesion interactiva activa, sale con 0 sin apagar y el timer reintenta en
+# el siguiente tick, hasta el corte duro de las 19:00.
+Description=Apagado programado del quiosco (exodia)
+Documentation=file:///opt/quiosco/quiosco-horario.sh
+
+[Service]
+Type=oneshot
+ExecStart=/opt/quiosco/quiosco-horario.sh apagar

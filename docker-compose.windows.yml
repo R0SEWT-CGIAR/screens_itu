@@ -11,7 +11,7 @@
 #   de su ultima IP conocida); igual se recomienda reserva DHCP.
 services:
   quiosco:
-    image: cipotato/quiosco:0.1.4
+    image: cipotato/quiosco:0.1.5
     init: true
     ports:
       - "8000:8000"

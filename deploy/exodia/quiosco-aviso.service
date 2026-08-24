@@ -1,0 +1,6 @@
+[Unit]
+Description=Aviso previo al apagado del quiosco (exodia)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/quiosco/quiosco-horario.sh avisar

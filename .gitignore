@@ -24,3 +24,6 @@ data/
 # Personal scratch notes (not project artifacts)
 notas.md
 notes.md
+
+# Worktrees de git creados por agentes; nunca se commitean
+.claude/worktrees/

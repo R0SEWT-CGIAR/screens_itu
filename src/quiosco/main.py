@@ -100,6 +100,10 @@ async def lifespan(app: FastAPI):
     global proxy_client
     proxy_client = httpx.AsyncClient(verify=False, timeout=30, follow_redirects=True)
     manager.connect()
+    # Sin esto un reboot deja los Chromecast conectados pero en negro: connect()
+    # no rota. Los que no esten listos aun los recoge el watchdog.
+    for cc_id in manager.states:
+        manager.maybe_autostart_rotation(cc_id)
     # Start screenshot task for unproxyable URLs
     # Use first CC resolution as output size (all CCs typically share a screen res)
     first_state = next(iter(manager.states.values()), None)

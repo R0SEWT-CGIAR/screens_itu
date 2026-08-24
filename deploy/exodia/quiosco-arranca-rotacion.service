@@ -1,0 +1,33 @@
+[Unit]
+# PUENTE TEMPORAL. Arranca la rotacion tras cada arranque del contenedor.
+#
+# Existe solo porque la imagen que corre en produccion todavia no trae el
+# auto-start del lifespan (ver maybe_autostart_rotation en cast_manager.py).
+# En cuanto se despliegue una imagen con ese fix, esta unit se puede retirar:
+#   sudo systemctl disable --now quiosco-arranca-rotacion.service
+#
+# Sin esto, exodia despierta a las 07:06 con las pantallas en negro hasta que
+# alguien pulse Start en la consola.
+Description=Arranca la rotacion del quiosco tras el boot (puente hasta el fix en imagen)
+After=docker.service network-online.target
+Wants=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Espera a que la API responda antes de pedir el arranque: tras un boot el
+# contenedor tarda en levantar y un POST temprano fallaria con 404/connection
+# refused. 60 intentos x 5s = 5 min de margen.
+ExecStart=/bin/bash -c 'for i in $(seq 1 60); do \
+  if curl -sf -m 5 -o /dev/null http://127.0.0.1:8000/api/status; then \
+    for cc in $(curl -s -m 5 http://127.0.0.1:8000/api/status \
+        | python3 -c "import json,sys; print(\" \".join(c[\"id\"] for c in json.load(sys.stdin)[\"chromecasts\"]))"); do \
+      curl -sf -m 20 -X POST "http://127.0.0.1:8000/api/chromecasts/$cc/start" \
+        && logger -t quiosco-arranca-rotacion "rotacion arrancada en $cc" \
+        || logger -t quiosco-arranca-rotacion "FALLO al arrancar $cc"; \
+    done; exit 0; \
+  fi; sleep 5; \
+done; logger -t quiosco-arranca-rotacion "la API nunca respondio en 5 min"; exit 1'
+
+[Install]
+WantedBy=multi-user.target

@@ -30,19 +30,9 @@
       "zoom": 1.0
     },
     {
-      "url": "https://172.25.0.22/public/mapshow.htm?id=5530&mapid=E47F7755-5A46-42A0-B0FD-37695AE45EED",
-      "label": "Estado de la red",
-      "zoom": 1.0
-    },
-    {
       "url": "https://stats.uptimerobot.com/26r4CjSckG",
       "label": "Uptime Robot",
       "zoom": 0.6
-    },
-    {
-      "url": "https://172.25.0.22/public/mapshow.htm?id=5380&mapid=E0352718-B093-461A-8A3F-0AF536DCF406",
-      "label": "Mapa de estaciones de la papa",
-      "zoom": 1.0
     },
     {
       "url": "https://www.cgiar.org/",
@@ -55,19 +45,16 @@
       "zoom": 0.9
     },
     {
-      "url": "https://gigwa.cgiar.org/",
-      "label": "GIGWA",
-      "zoom": 0.9
-    },
-    {
-      "url": "http://172.25.19.173:3456/",
+      "url": "http://172.25.21.37:3456/",
       "label": "Suite de agentes",
       "zoom": 1.0,
       "optional": true,
-      "direct": true
+      "render_mode": "live_screenshot"
     }
   ],
-  "default_interval_seconds": 15,
+  "default_interval_seconds": 120,
   "screenshot_gif_duration_seconds": 8,
+  "live_screenshot_interval_seconds": 2,
+  "auto_start_rotation": true,
   "proxy_auto_subnet": "172.25."
 }

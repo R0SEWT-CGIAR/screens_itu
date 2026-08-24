@@ -1,0 +1,16 @@
+[Unit]
+Description=Horario de apagado del quiosco (L-V 17:00, reintentos hasta 19:00)
+
+[Timer]
+# 17:00 y luego cada 15 min por si el guard de sesion posterga.
+OnCalendar=Mon-Fri 17,18:00/15
+# Corte duro: a esta hora el script apaga aunque haya sesion activa.
+OnCalendar=Mon-Fri 19:00
+# CRITICO: Persistent=false. Con true, un disparo perdido (fin de semana, o la
+# maquina apagada a las 17:00) se ejecutaria al arrancar -> exodia se apagaria
+# sola a los segundos de despertar el lunes a las 07:06.
+Persistent=false
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

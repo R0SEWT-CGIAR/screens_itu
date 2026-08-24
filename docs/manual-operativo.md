@@ -263,7 +263,14 @@ docker compose pull
 docker compose up -d
 ```
 
-Tras cada reinicio del contenedor la rotacion arranca detenida: iniciar cada Chromecast desde la UI o con `POST /api/chromecasts/<id>/start`.
+Desde la version 0.1.5 la rotacion arranca sola tras cada reinicio del contenedor: el lifespan la inicia al conectar, y el watchdog la reintenta para las pantallas que todavia no respondian en ese momento (p. ej. la tele aun apagada). Antes quedaba detenida y habia que iniciar cada Chromecast a mano, lo que dejaba las pantallas en negro tras cualquier reboot.
+
+Dos matices del auto-start:
+
+- Una rotacion que un tecnico detuvo adrede no se vuelve a arrancar por detras; el reinicio del contenedor si limpia esa marca.
+- Se puede desactivar con `"auto_start_rotation": false` en `config.json` (default `true`).
+
+Para iniciar o detener a mano sigue estando `POST /api/chromecasts/<id>/start` y `/stop`, o la consola.
 
 ### Guardrails y rollback en Exodia
 

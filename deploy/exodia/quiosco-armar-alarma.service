@@ -1,0 +1,15 @@
+[Unit]
+# Red de seguridad: arma la alarma RTC al arrancar. Sin esto, si exodia se
+# apagara sin pasar por el apagado programado (kernel panic, corte de luz que
+# la deja apagada, poweroff manual), no quedaria alarma armada y no despertaria
+# a la mañana siguiente.
+Description=Armar alarma RTC de despertado del quiosco
+After=time-sync.target
+Wants=time-sync.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/quiosco/quiosco-horario.sh armar
+
+[Install]
+WantedBy=multi-user.target

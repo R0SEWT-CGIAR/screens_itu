@@ -1,0 +1,9 @@
+[Unit]
+Description=Aviso 10 min antes del apagado del quiosco
+
+[Timer]
+OnCalendar=Mon-Fri 16:50
+Persistent=false
+
+[Install]
+WantedBy=timers.target

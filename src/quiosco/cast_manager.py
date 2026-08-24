@@ -88,6 +88,9 @@ class CastState:
     uuid: str = ""
     current_index: int = 0
     rotating: bool = False
+    # Distingue "no rota porque nadie la arranco" (arranque en frio) de "no rota
+    # porque un tecnico le dio Stop": el auto-start solo aplica al primer caso.
+    stopped_by_user: bool = False
     current_url: Optional[str] = None
     current_label: Optional[str] = None
     connected: bool = False
@@ -482,6 +485,7 @@ class CastManager:
         if not state or not state.connected or not self.links_for(cc_id):
             return False
 
+        state.stopped_by_user = False
         self._sync_current_link_state(state)
         self.launch_display(cc_id)
 
@@ -492,15 +496,45 @@ class CastManager:
         state.task = asyncio.create_task(self._rotation_loop(cc_id))
         return True
 
-    def stop_rotation(self, cc_id: str) -> bool:
+    def stop_rotation(self, cc_id: str, by_user: bool = True) -> bool:
         state = self.states.get(cc_id)
         if not state:
             return False
+        state.stopped_by_user = by_user
         state.rotating = False
         if state.task and not state.task.done():
             state.task.cancel()
         state.task = None
         return True
+
+    @property
+    def autostart_rotation_enabled(self) -> bool:
+        """Si la rotacion debe arrancar sola al conectar (config, default True)."""
+        return bool(self.config.get("auto_start_rotation", True))
+
+    def maybe_autostart_rotation(self, cc_id: str) -> bool:
+        """Arranca la rotacion sin intervencion humana en un arranque en frio.
+
+        El lifespan solo conecta; sin esto un reboot deja los Chromecast
+        conectados pero con las pantallas en negro hasta que alguien pulsa Start.
+        Se llama tambien desde el watchdog porque un Chromecast puede tardar en
+        aparecer despues de que el servidor ya arranco (p. ej. la tele todavia
+        apagada), y en ese caso el intento del lifespan habria fallado.
+        """
+        if not self.autostart_rotation_enabled:
+            return False
+        state = self.states.get(cc_id)
+        if not state or state.rotating or state.stopped_by_user:
+            return False
+        # display_launched ya en True significa que esta pantalla no viene de un
+        # arranque en frio: o la paro un tecnico, o el watchdog la esta tratando
+        # como degradada. En ninguno de esos casos nos toca arrancarla por detras.
+        if state.display_launched:
+            return False
+        if not state.connected or not self.links_for(cc_id):
+            return False
+        logger.info("[%s] Auto-start de rotacion (arranque en frio)", state.name)
+        return self.start_rotation(cc_id)
 
     def skip(self, cc_id: str, step_size: int = 1) -> bool:
         """Salta al link siguiente (o anterior) sin esperar el intervalo."""
@@ -646,7 +680,7 @@ class CastManager:
             self.interval = seconds
         for cc_id, state in self.states.items():
             if state.rotating:
-                self.stop_rotation(cc_id)
+                self.stop_rotation(cc_id, by_user=False)
                 self.start_rotation(cc_id)
         return self.interval
 
@@ -845,6 +879,8 @@ class CastManager:
         state.connected = True
         state.last_error = None
 
+        self.maybe_autostart_rotation(cc_id)
+
         chromecast = state._chromecast
         now = time.monotonic()
         dashcast_running = bool(chromecast and chromecast.app_id == DASHCAST_APP_ID)
@@ -964,6 +1000,7 @@ class CastManager:
                     "playlist_link_ids": [link["id"] for link in self.links_for(s.id)],
                     "connected": s.connected,
                     "rotating": s.rotating,
+                    "stopped_by_user": s.stopped_by_user,
                     "current_url": s.current_url,
                     "current_label": s.current_label,
                     "current_index": s.current_index,
