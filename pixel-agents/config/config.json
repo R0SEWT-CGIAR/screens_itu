@@ -1,0 +1,23 @@
+{
+  "vscode": {
+    "soundEnabled": true,
+    "lastSeenVersion": "",
+    "alwaysShowLabels": false,
+    "watchAllSessions": false,
+    "hooksEnabled": true,
+    "hooksInfoShown": false,
+    "showAreas": false,
+    "areaMappings": {}
+  },
+  "standalone": {
+    "soundEnabled": true,
+    "lastSeenVersion": "1.4",
+    "alwaysShowLabels": false,
+    "watchAllSessions": true,
+    "hooksEnabled": true,
+    "hooksInfoShown": false,
+    "showAreas": false,
+    "areaMappings": {}
+  },
+  "externalAssetDirectories": []
+}

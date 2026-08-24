@@ -1,0 +1,30 @@
+[Unit]
+# Tunel inverso para que el quiosco (en exodia) y los Chromecasts alcancen la
+# suite de agentes sin depender de la IP DHCP de esta laptop:
+#
+#   Chromecast --> exodia 172.25.21.37:3456 --> [tunel ssh] --> laptop 127.0.0.1:3456
+#
+# La conexion la inicia la laptop, asi que funciona igual por cableada o WiFi
+# (esquiva el client isolation del WiFi).
+#
+# Requiere en exodia: GatewayPorts clientspecified en sshd, si no el bind en
+# 172.25.21.37 falla y el servicio reintenta cada 30 s hasta que exista.
+Description=Tunel inverso de la suite de agentes hacia exodia (quiosco)
+After=network-online.target pixel-agents.service
+Wants=network-online.target pixel-agents.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -N -T \
+  -o BatchMode=yes \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=20 \
+  -o ServerAliveCountMax=3 \
+  -o TCPKeepAlive=yes \
+  -R 172.25.21.37:3456:127.0.0.1:3456 \
+  exodia
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,24 @@
+[Unit]
+# Suite de agentes que consume el quiosco (link opcional "Suite de agentes").
+# Sirve la oficina pixel-art con las sesiones de Claude Code de ESTA laptop.
+# Ojo: la ruta de node esta clavada a la version de nvm instalada (v22.22.0).
+# Si nvm cambia de version, actualizar ExecStart y hacer daemon-reload.
+Description=Pixel Agents standalone server (suite de agentes para el quiosco)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/rody
+Environment=NODE_ENV=production
+Environment=PATH=/home/rody/.nvm/versions/node/v22.22.0/bin:/usr/local/bin:/usr/bin:/bin
+# Los Chromecast del quiosco corren Chrome 70: sin esto el bundle (?. y ??, Chrome 80+)
+# no parsea y la pantalla queda en blanco. Es idempotente y re-parchea despues de cada
+# `npm i -g pixel-agents`, que reescribe dist/.
+ExecStartPre=/home/rody/.pixel-agents/chromecast-compat.sh
+ExecStart=/home/rody/.nvm/versions/node/v22.22.0/bin/node /home/rody/.nvm/versions/node/v22.22.0/lib/node_modules/pixel-agents/dist/cli.js --port 3456 --host 127.0.0.1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
