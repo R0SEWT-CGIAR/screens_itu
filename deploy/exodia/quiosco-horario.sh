@@ -87,6 +87,23 @@ case "${1:-}" in
     armar_alarma
     ;;
 
+  probar-alarma)
+    # Valida que el BIOS honra la alarma RTC desde S5 (apagado total), que es el
+    # unico supuesto del diseño que no se puede verificar sin un ciclo real.
+    # Reutilizable tras cambios de BIOS o de hardware.
+    #
+    # No deja el sistema en mal estado: al arrancar, quiosco-armar-alarma.service
+    # rearma la alarma para el proximo dia habil.
+    mins="${2:-3}"
+    epoch=$(( $(date +%s) + mins * 60 ))
+    echo 0 > "$RTC_ALARM"
+    echo "$epoch" > "$RTC_ALARM"
+    log "PRUEBA: alarma en $mins min -> $(date -d "@$epoch" '+%F %T %Z')"
+    grep -iE "alrm_time|alrm_date|alarm_IRQ" /proc/driver/rtc | sed 's/^/  /'
+    log "PRUEBA: apagando. Si el BIOS honra la alarma, debe encender sola."
+    systemctl poweroff
+    ;;
+
   estado)
     echo "ahora:            $(date '+%F %T %Z')"
     echo "proxima alarma:   $(date -d "@$(proxima_alarma_epoch)" '+%F %T %Z')"
@@ -104,7 +121,7 @@ case "${1:-}" in
     ;;
 
   *)
-    echo "uso: $0 {avisar|apagar|armar|estado}" >&2
+    echo "uso: $0 {avisar|apagar|armar|estado|probar-alarma [minutos]}" >&2
     exit 64
     ;;
 esac
