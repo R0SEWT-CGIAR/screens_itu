@@ -13,9 +13,10 @@ Runbook de incidente para el host de producción. Verificado empíricamente el
 - **Triage antes de actuar.** Nunca mandes el magic packet sin comprobar primero
   si la máquina ya está encendida. Los tres síntomas se parecen desde la UI pero
   tienen causas distintas.
-- **Manda el magic packet UNA vez y espera 4 minutos.** El POST del ThinkStation
-  P510 tarda **2m37s** (memory training) antes de que el kernel arranque.
-  Reintentar no acelera nada y hace creer que el WoL falló cuando no falló.
+- **Manda el magic packet UNA vez y espera 5 minutos.** El POST del ThinkStation
+  P510 es variable: medido en **34s** y en **2m37s** el mismo dia (ver Paso 3).
+  Durante ese rato no hay ninguna señal, asi que un arranque lento es
+  indistinguible de un fallo. Reintentar no acelera nada.
 - **Captura la línea base antes de cualquier acción disruptiva**: guarda el
   `/api/status` completo, no solo el HTTP code. Sin el `rotating` previo no
   puedes saber si dejaste el servicio como estaba.
@@ -75,17 +76,23 @@ print(f'magic packet enviado desde {src} -> 172.25.21.255:9')
 "
 ```
 
-## Paso 3 — Esperar el arranque (~4 min, es lo normal)
+## Paso 3 — Esperar el arranque (hasta ~4 min, es lo normal)
 
-Cronología medida el 2026-08-24, desde el envío del paquete:
+**El POST del P510 es variable, no una constante.** Medido el 2026-08-24 en dos
+arranques reales:
 
-| t+ | Evento |
-|---|---|
-| 0s | magic packet → la máquina enciende |
-| 0–2m37s | **firmware/POST** (memory training del P510) — silencio total, ni ping |
-| 2m48s | kernel arranca |
-| ~3m24s | responde al ping |
-| ~4m | quiosco sirviendo en `:8000` |
+| Arranque | Contexto | Firmware/POST | Ping desde el disparo |
+|---|---|---|---|
+| 09:57 | primero tras 32 días de uptime | **2m37s** | ~3m24s |
+| 15:41 | el siguiente, 6 h después | **34s** | ~1m20s |
+
+Ambos habían estado apagados ~4 min, así que no es la duración del apagado. La
+hipótesis (2 muestras, sin confirmar) es que el P510 hace entrenamiento completo
+de memoria en el primer arranque tras un uptime largo y luego cachea.
+
+Consecuencia práctica: **planifica para el peor caso**. Durante el POST no hay
+ping, ni ARP, ni nada — es indistinguible de un fallo. No concluyas nada antes
+de 5 minutos.
 
 `sleep` en foreground está bloqueado por el harness; usa un until-loop:
 
@@ -165,10 +172,13 @@ mecanismo, sin probar. No trates un [ded] como hecho establecido.
 
 ### 1. Rendirse antes de los 4 minutos — [obs], el más probable
 
-Es el fallo que ocurrió de verdad. El POST del P510 tarda **2m37s** y durante ese
-tiempo no hay ping, ni ARP, ni nada: es indistinguible de un WoL fallido. En el
-incidente mandé un segundo paquete a los 3 min creyendo que había fallado; el
-`systemd-analyze` demostró después que fue el **primero** el que la despertó.
+Es el fallo que ocurrió de verdad. Ese día el POST tardó **2m37s** y durante ese
+tiempo no hay ping, ni ARP, ni nada: es indistinguible de un WoL fallido. Mandé
+un segundo paquete a los 3 min creyendo que había fallado; el `systemd-analyze`
+demostró después que fue el **primero** el que la despertó.
+
+Y como el POST es variable (34s–2m37s, ver Paso 3), no sirve razonar con "ya pasó
+lo que suele tardar": un arranque lento se parece exactamente a un fallo.
 
 Diagnóstico: ninguno. Espera. No reintentes antes de 5 minutos.
 

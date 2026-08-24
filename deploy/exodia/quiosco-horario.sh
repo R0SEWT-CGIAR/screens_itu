@@ -6,10 +6,13 @@
 # este encendida para mandar el magic packet. El WoL queda como respaldo manual
 # (ver .claude/skills/recover-exodia/SKILL.md).
 #
-# Por que 07:06 y no 07:10: el POST del ThinkStation P510 tarda 2m37s (memory
-# training) y el userspace ~1min mas. Medido el 2026-08-24: alarma -> ping en
-# ~3m24s, servicio en :8000 en ~4min. Armando a las 07:06 el quiosco esta
-# sirviendo a las ~07:10.
+# Por que 07:06 y no 07:10: el POST del P510 es VARIABLE y hay que cubrir el
+# peor caso. Medido el 2026-08-24 en dos arranques:
+#   - 2m37s de firmware  (primer arranque tras 32 dias de uptime; el P510
+#     parece hacer entrenamiento completo de memoria en ese caso)
+#   -   34s de firmware  (arranque siguiente, 6 h despues)
+# Mas ~1min de userspace. Armar a 07:06 cubre ambos: el quiosco sirve a las
+# ~07:08 en el arranque rapido y a las ~07:10 en el lento.
 set -euo pipefail
 
 WAKE_HORA="07:06"        # hora local (exodia esta en America/Lima)
