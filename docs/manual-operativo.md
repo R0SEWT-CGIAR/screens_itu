@@ -347,9 +347,16 @@ Sobre los links:
 - `Ajustar`: previsualiza el link a la resolucion real de la pantalla (la caja 16:9 usa
   el mismo `/proxy/`, `/p/` o asset de screenshot que la display page) y deja mover el
   zoom viendo el resultado antes de guardar. Al guardar, las pantallas lo toman en su
-  poll de 2s. En links que se muestran como captura el zoom solo cambia cuanto contenido
-  entra en la **proxima** captura, asi que ahi el boton guarda y encola la recaptura, y
-  el preview se actualiza solo cuando el asset nuevo esta listo.
+  poll de 2s.
+  En links que se muestran como **captura** el zoom no cambia lo que ya esta publicado
+  (el asset llena la pantalla siempre); define cuanto contenido entra en la **proxima**
+  captura. Por eso, cuando la URL se deja embeber en un navegador moderno aunque el
+  Chromecast la muestre como captura (PRTG es el caso tipico), el modal previsualiza la
+  **pagina en vivo** al mismo viewport con el que captura Chromium: ese es el encuadre
+  que va a tener el asset siguiente. El selector `Captura publicada` vuelve a mostrar lo
+  que la pantalla tiene ahora. Las paginas que no se dejan proxear (Cloudflare,
+  anti-frame) solo ofrecen su captura. El boton guarda y encola la recaptura, y el
+  preview salta a la captura y se refresca solo cuando el asset nuevo esta listo.
 - Agregar, editar (URL, nombre, zoom, opcional, directo, como se muestra) y borrar.
 - Reordenar con las flechas.
 - Habilitar / deshabilitar: un link deshabilitado sale de la rotacion de todas las
