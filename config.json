@@ -21,6 +21,17 @@
         1280,
         720
       ]
+    },
+    {
+      "id": "cc3",
+      "name": "ITUChromecast 4 Sotano",
+      "host": "172.25.19.75",
+      "port": 8009,
+      "uuid": "b50ca351-6c51-88e4-4dd6-157043b237e4",
+      "resolution": [
+        1280,
+        720
+      ]
     }
   ],
   "links": [
