@@ -2,7 +2,7 @@
   "chromecasts": [
     {
       "id": "cc1",
-      "name": "ITU_Chromecast 1",
+      "name": "ITUChromecast 3 Entrada",
       "host": "172.25.19.160",
       "port": 8009,
       "uuid": "add083f9-01dd-db70-7bea-a2bfb817c86e",
@@ -13,7 +13,7 @@
     },
     {
       "id": "cc2",
-      "name": "ITU CHROMECAST 3",
+      "name": "ITUChromecast 1 Interior",
       "host": "172.25.19.185",
       "port": 8009,
       "uuid": "99e15c34-34cb-5513-49b9-fced4223e981",

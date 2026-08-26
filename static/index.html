@@ -822,8 +822,12 @@
     return link && link.render_mode === 'live_screenshot';
   }
 
+  // Los botones de castear repiten el nombre de cada pantalla en cada fila de
+  // link, asi que se queda lo que la distingue: "ITUChromecast 4 Sotano" ->
+  // "4 Sotano", "ITU_Chromecast 1" -> "1".
   function shortName(name) {
-    return String(name).replace('ITU ', '').replace('ITU_', '');
+    const short = String(name).replace(/^ITU[\s_]*chromecast[\s_]*/i, '').trim();
+    return short || String(name);
   }
 
   function linkForm(link) {

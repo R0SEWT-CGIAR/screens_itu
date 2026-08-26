@@ -11,7 +11,7 @@
 #   reencuentra escaneando el /24 de su ultima IP conocida (>= 0.1.1).
 services:
   quiosco:
-    image: cipotato/quiosco:0.1.7
+    image: cipotato/quiosco:0.1.8
     init: true
     network_mode: host
     environment:
