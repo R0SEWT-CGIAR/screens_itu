@@ -272,6 +272,9 @@
     .modal-head .grow { flex: 1; min-width: 0; }
     .modal-title { font-size: 1rem; font-weight: 600; color: #f8fafc; }
     .modal-url { font-size: 0.7rem; color: #64748b; word-break: break-all; margin-top: 2px; }
+    .zoom-views { display: flex; gap: 6px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+    .zoom-views .hint { font-size: 0.72rem; color: #64748b; }
+    .btn-toggle-on { background: #1d4ed8; color: #fff; }
     .zoom-controls {
       display: flex;
       align-items: center;
@@ -351,6 +354,7 @@
       </div>
       <button class="btn btn-ghost btn-sm" onclick="closeZoom()">Cerrar</button>
     </div>
+    <div class="zoom-views" id="zoomViews"></div>
     <div class="stage" id="zoomStage"></div>
     <div class="zoom-controls">
       <label style="font-size:0.8rem; color:#94a3b8">Zoom</label>
@@ -979,12 +983,17 @@
     const link = state.links.find(l => l.id === linkId);
     if (!link) return;
     const cc = state.chromecasts[0];
+    const captured = link.preview_mode === 'screenshot';
     zoomEditor = {
       linkId,
       ccId: cc ? cc.id : null,
       value: Number(link.zoom) || 1,
-      previewSrc: link.preview_src,
-      mode: link.preview_mode
+      captured,
+      assetSrc: captured ? link.preview_src : null,
+      liveSrc: link.live_preview_src || null,
+      // Con la pagina viva disponible el zoom se ve moverse; sobre el asset ya
+      // capturado no cambia nada, porque siempre llena la pantalla.
+      view: link.live_preview_src ? 'live' : 'asset'
     };
 
     document.getElementById('zoomTitle').textContent = 'Ajustar: ' + link.label;
@@ -1009,23 +1018,29 @@
     return (cc && cc.resolution) || [1280, 720];
   }
 
-  // El elemento del preview se crea una sola vez por apertura: mover el slider
-  // solo cambia su tamano, para no recargar la pagina embebida en cada paso.
+  // El elemento del preview se crea una vez por vista: mover el slider solo
+  // cambia su tamano, para no recargar la pagina embebida en cada paso.
   function buildZoomStage() {
     const stage = document.getElementById('zoomStage');
     stage.innerHTML = '';
-    const frame = zoomEditor.mode === 'screenshot'
-      ? document.createElement('img')
-      : document.createElement('iframe');
+    const live = zoomEditor.view === 'live';
+    const frame = live ? document.createElement('iframe') : document.createElement('img');
     frame.className = 'stage-frame';
-    if (zoomEditor.mode === 'screenshot') {
-      frame.style.objectFit = 'fill';   // igual que en la display page
-    } else {
+    if (live) {
       frame.setAttribute('scrolling', 'no');
+    } else {
+      frame.style.objectFit = 'fill';   // igual que en la display page
     }
-    frame.src = zoomEditor.previewSrc;
+    frame.src = live ? zoomEditor.liveSrc : zoomEditor.assetSrc;
     stage.appendChild(frame);
     stageObserver.observe(stage);
+  }
+
+  function setZoomView(view) {
+    if (zoomEditor.view === view) return;
+    zoomEditor.view = view;
+    buildZoomStage();
+    applyZoom();
   }
 
   function applyZoom() {
@@ -1042,13 +1057,32 @@
       `Pantalla ${w}x${h} · la pagina se carga a ${vw}x${vh} y se encoge a ${zoom.toFixed(2)}x. ` +
       `Zoom menor entra mas contenido, con letra mas chica.`;
 
-    const isScreenshot = zoomEditor.mode === 'screenshot';
-    document.getElementById('zoomNote').innerHTML = isScreenshot
-      ? `<div class="zoom-note">Este link se muestra como captura, no como pagina embebida: la imagen
-         siempre ocupa toda la pantalla y el zoom solo cambia cuanto contenido entra en la
-         <strong>proxima captura</strong>. Guarda y recaptura para ver el resultado real aca.</div>`
+    const captured = zoomEditor.captured;
+    const live = zoomEditor.view === 'live';
+
+    // El selector solo tiene sentido cuando hay dos cosas distintas que mirar.
+    document.getElementById('zoomViews').innerHTML = captured && zoomEditor.liveSrc
+      ? `<button class="btn btn-sm ${live ? 'btn-toggle-on' : 'btn-ghost'}"
+           onclick="setZoomView('live')">Pagina en vivo</button>
+         <button class="btn btn-sm ${live ? 'btn-ghost' : 'btn-toggle-on'}"
+           onclick="setZoomView('asset')">Captura publicada</button>
+         <span class="hint">La pantalla muestra la captura; la pagina viva sirve para encuadrarla.</span>`
       : '';
-    document.getElementById('zoomSaveBtn').textContent = isScreenshot
+
+    let note = '';
+    if (captured && live) {
+      note = `Esta pagina se muestra en la pantalla como <strong>captura</strong>. Lo que ves aca es
+              la pagina viva al mismo viewport con el que se captura, asi que es el encuadre que va
+              a tener la <strong>proxima captura</strong>: guarda y recaptura para publicarlo.`;
+    } else if (captured) {
+      note = `Esta es la captura ya publicada, y ocupa toda la pantalla pase lo que pase: mover el
+              zoom no la cambia. El zoom solo define cuanto contenido entra en la
+              <strong>proxima captura</strong>.` +
+             (zoomEditor.liveSrc ? ' Para verlo moverse, usa <strong>Pagina en vivo</strong>.' : '');
+    }
+    document.getElementById('zoomNote').innerHTML = note
+      ? `<div class="zoom-note">${note}</div>` : '';
+    document.getElementById('zoomSaveBtn').textContent = captured
       ? 'Guardar y recapturar' : 'Guardar zoom';
   }
 
@@ -1066,23 +1100,27 @@
   // Tras recapturar, el asset cambia de revision en /api/status: se refresca la
   // imagen sin cerrar el modal.
   function refreshZoomAsset() {
-    if (!zoomEditor || zoomEditor.mode !== 'screenshot') return;
+    if (!zoomEditor || !zoomEditor.captured) return;
     const link = state.links.find(l => l.id === zoomEditor.linkId);
-    if (!link || link.preview_src === zoomEditor.previewSrc) return;
-    zoomEditor.previewSrc = link.preview_src;
+    if (!link || link.preview_src === zoomEditor.assetSrc) return;
+    zoomEditor.assetSrc = link.preview_src;
+    if (zoomEditor.view !== 'asset') return;
     const frame = document.querySelector('#zoomStage .stage-frame');
     if (frame) frame.src = link.preview_src;
   }
 
   async function saveZoom() {
-    const { linkId, value, mode } = zoomEditor;
+    const { linkId, value, captured } = zoomEditor;
     try {
       await api('PATCH', '/api/links/' + linkId, { zoom: value });
     } catch (e) { return; }
-    if (mode === 'screenshot') {
+    if (captured) {
       try {
         await api('POST', `/api/links/${linkId}/recapture`);
         toast('Zoom guardado. Recaptura encolada: el preview se actualiza en unos segundos.');
+        // Pasar a la captura: es lo que va a ver la pantalla, y se refresca sola
+        // en cuanto el asset nuevo esta listo.
+        setZoomView('asset');
       } catch (e) { /* ya informado */ }
     } else {
       closeZoom();

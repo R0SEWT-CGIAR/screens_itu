@@ -184,6 +184,16 @@ def _link_view(link: dict) -> dict:
     else:
         view["preview_mode"] = "iframe"
         view["preview_src"] = _iframe_src(link["url"], direct=link.get("direct", False))
+
+    # Un link puede mostrarse como captura en el Chromecast y aun asi dejarse
+    # embeber en el navegador del tecnico (PRTG es el caso tipico). Ahi el
+    # preview del zoom tiene que ser la pagina viva: el asset ya capturado
+    # siempre llena la pantalla, asi que mover el zoom sobre el no cambia nada,
+    # mientras que la pagina a vw x vh muestra justo lo que va a entrar en la
+    # proxima captura. Las que no se dejan proxear (Cloudflare, anti-frame) se
+    # quedan solo con su asset.
+    if _can_proxy(link["url"]):
+        view["live_preview_src"] = _iframe_src(link["url"], direct=link.get("direct", False))
     return view
 
 

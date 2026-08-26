@@ -340,6 +340,18 @@ class StatusEndpointTests(ConsoleApiTests):
         self.assertTrue(by_label["Iframe"]["preview_src"].startswith("/p/"))
         self.assertEqual(by_label["PRTG"]["preview_src"], "/proxy/public/mapshow.htm?id=1")
 
+    def test_capturable_links_still_offer_a_live_preview_when_proxyable(self):
+        """PRTG se muestra como captura pero se deja embeber: el zoom se ve moverse."""
+        prtg_id = self.link_ids[2]
+        self.client.patch(f"/api/links/{prtg_id}", json={"render_mode": "live_screenshot"})
+
+        by_label = {l["label"]: l for l in self.client.get("/api/status").json()["links"]}
+
+        self.assertEqual(by_label["PRTG"]["preview_mode"], "screenshot")
+        self.assertEqual(by_label["PRTG"]["live_preview_src"], "/proxy/public/mapshow.htm?id=1")
+        # cgiar.org no se deja proxear: ahi el asset es lo unico que hay.
+        self.assertIsNone(by_label["Screenshot"].get("live_preview_src"))
+
     def test_status_does_not_contaminate_the_links_that_go_to_config_json(self):
         self.client.get("/api/status")
 
