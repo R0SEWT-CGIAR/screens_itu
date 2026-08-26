@@ -165,22 +165,49 @@ async def config_error_handler(request: Request, exc: config_store.ConfigError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+def _link_view(link: dict) -> dict:
+    """Copia del link con como lo renderizaria la display page.
+
+    La consola dibuja el preview con el mismo src que el Chromecast, asi que lo
+    que se ve al ajustar el zoom es lo que va a salir en pantalla. Es una copia:
+    manager.links son los dicts que se serializan a config.json.
+    """
+    view = dict(link)
+    if _link_uses_screenshot(link):
+        asset_key = screenshot_asset_key(link["url"])
+        extension = _screenshot_extension(link)
+        revision = screenshot_asset_revision(asset_key, extension)
+        view["preview_mode"] = "screenshot"
+        view["preview_src"] = (
+            f"/static/screenshots/{asset_key}.{extension}?v={revision or 'pending'}"
+        )
+    else:
+        view["preview_mode"] = "iframe"
+        view["preview_src"] = _iframe_src(link["url"], direct=link.get("direct", False))
+    return view
+
+
 @app.get("/api/status")
 def status():
     payload = manager.get_status()
     for cc in payload["chromecasts"]:
         cc["health"] = health.diagnose(cc, payload["interval_seconds"])
+    payload["links"] = [_link_view(link) for link in payload["links"]]
     return payload
 
 
 @app.get("/api/current/{cc_id}")
-def current(cc_id: str):
+def current(cc_id: str, preview: bool = False):
     state = manager.states.get(cc_id)
     if not state:
         raise HTTPException(404)
 
-    # El poll de la display page (cada 2s) es el heartbeat del watchdog
-    manager.note_display_heartbeat(cc_id)
+    # El poll de la display page (cada 2s) es el heartbeat del watchdog.
+    # El espejo de la consola pide preview=1 justamente para no contarlo: si lo
+    # contara, una pestana abierta en la oficina mantendria display_ready en
+    # verde aunque el Chromecast estuviera muerto.
+    if not preview:
+        manager.note_display_heartbeat(cc_id)
 
     link = manager._current_link(state)
     current_url = state.current_url or (link["url"] if link else None)
@@ -477,7 +504,9 @@ def _iframe_src(url: str, direct: bool = False) -> str:
 
 
 @app.get("/cast/display")
-def cast_display(cc_id: str = "cc1"):
+def cast_display(cc_id: str = "cc1", preview: bool = False):
+    """La pagina que carga DashCast. Con preview=1 es el espejo de la consola:
+    identica, pero su poll no cuenta como heartbeat del watchdog."""
     cast_w, cast_h = _cc_resolution(cc_id)
     # Solo los links de esta pantalla: con playlists, cada Chromecast puede
     # tener una seleccion y un orden propios.
@@ -529,6 +558,7 @@ def cast_display(cc_id: str = "cc1"):
                     f' transform:scale({sx},{sy}); transform-origin:top left;"></iframe>\n'
                 )
 
+    current_query = "?preview=1" if preview else ""
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -562,6 +592,7 @@ def cast_display(cc_id: str = "cc1"):
 {iframes_html}<div id="empty-notice" class="notice" style="display:none">Pantalla sin links configurados</div>
 <script>
   var ccId = "{cc_id}";
+  var currentQuery = "{current_query}";
   var configRevision = {config_revision};
   var currentLinkId = null;
   var currentAssetKey = null;
@@ -584,7 +615,7 @@ def cast_display(cc_id: str = "cc1"):
 
   function poll() {{
     var xhr = new XMLHttpRequest();
-    xhr.open("GET", "/api/current/" + ccId, true);
+    xhr.open("GET", "/api/current/" + ccId + currentQuery, true);
     xhr.onreadystatechange = function() {{
       if (xhr.readyState !== 4) return;
       if (xhr.status !== 200) return;
@@ -625,6 +656,16 @@ def cast_display(cc_id: str = "cc1"):
             currentAssetRevision = null;
           }}
           if (newFrame) newFrame.style.display = "block";
+          // Embebida en la consola: avisarle del cambio para que su pie y su
+          // barra de progreso no queden esperando al poll de /api/status.
+          if (window.parent !== window) {{
+            try {{
+              window.parent.postMessage(
+                {{quiosco: "current", ccId: ccId, linkId: data.link_id, rotating: data.rotating}},
+                window.location.origin
+              );
+            }} catch (e) {{ /* la consola puede haberse ido */ }}
+          }}
         }} else if (
           data.render_mode === "screenshot" &&
           (data.asset_key !== currentAssetKey ||

@@ -326,6 +326,56 @@ class StatusEndpointTests(ConsoleApiTests):
         html_cc2 = self.client.get("/cast/display?cc_id=cc2").text
         self.assertIn(f'id="frame-{ids[0]}"', html_cc2)
 
+    # --- Preview visual de la consola ---
+
+    def test_status_links_carry_how_the_display_page_renders_them(self):
+        body = self.client.get("/api/status").json()
+        by_label = {link["label"]: link for link in body["links"]}
+
+        # cgiar.org no se deja embeber: la display page usa el GIF capturado.
+        self.assertEqual(by_label["Screenshot"]["preview_mode"], "screenshot")
+        self.assertIn("/static/screenshots/", by_label["Screenshot"]["preview_src"])
+        # Las proxyables se previsualizan con el mismo src que el Chromecast.
+        self.assertEqual(by_label["Iframe"]["preview_mode"], "iframe")
+        self.assertTrue(by_label["Iframe"]["preview_src"].startswith("/p/"))
+        self.assertEqual(by_label["PRTG"]["preview_src"], "/proxy/public/mapshow.htm?id=1")
+
+    def test_status_does_not_contaminate_the_links_that_go_to_config_json(self):
+        self.client.get("/api/status")
+
+        for link in main.manager.links:
+            self.assertNotIn("preview_src", link)
+            self.assertNotIn("preview_mode", link)
+
+    def test_status_exposes_screen_resolution_for_the_preview(self):
+        body = self.client.get("/api/status").json()
+
+        for cc in body["chromecasts"]:
+            self.assertEqual(len(cc["resolution"]), 2)
+            self.assertIn("seconds_on_current", cc)
+
+    def test_console_mirror_does_not_fake_the_watchdog_heartbeat(self):
+        state = main.manager.states["cc1"]
+        state.last_heartbeat_monotonic = None
+
+        self.client.get("/api/current/cc1?preview=1")
+        self.assertIsNone(
+            state.last_heartbeat_monotonic,
+            "el espejo de la consola no puede hacer pasar por viva una pantalla muerta",
+        )
+
+        # El poll real de la display page si cuenta.
+        self.client.get("/api/current/cc1")
+        self.assertIsNotNone(state.last_heartbeat_monotonic)
+
+    def test_display_page_polls_as_preview_only_when_asked(self):
+        mirror = self.client.get("/cast/display?cc_id=cc1&preview=1").text
+        self.assertIn('var currentQuery = "?preview=1";', mirror)
+        self.assertIn("window.parent.postMessage", mirror)
+
+        real = self.client.get("/cast/display?cc_id=cc1").text
+        self.assertIn('var currentQuery = "";', real)
+
 
 if __name__ == "__main__":
     unittest.main()

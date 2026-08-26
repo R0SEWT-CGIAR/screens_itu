@@ -48,6 +48,70 @@
     .dot.error { background: #ef4444; }
     .card-title { font-weight: 600; font-size: 1rem; }
     .card-subtitle { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+    .card-header .spacer { flex: 1; }
+
+    /* --- Espejo en vivo de la pantalla --- */
+    .mirror { margin-bottom: 14px; }
+    .stage {
+      position: relative;
+      width: 100%;
+      overflow: hidden;
+      background: #000;
+      border: 1px solid #334155;
+      border-radius: 8px;
+    }
+    .stage > .stage-frame {
+      position: absolute;
+      top: 0; left: 0;
+      border: none;
+      transform-origin: top left;
+      /* El espejo se mira, no se opera: los clics no llegan a la pagina espejada. */
+      pointer-events: none;
+      background: #000;
+    }
+    .stage-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 12px;
+      font-size: 0.78rem;
+      color: #64748b;
+      line-height: 1.5;
+    }
+    .stage-badge {
+      position: absolute;
+      top: 6px; right: 6px;
+      z-index: 2;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid #334155;
+      color: #94a3b8;
+      font-size: 0.62rem;
+      padding: 2px 7px;
+      border-radius: 999px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    .mirror-bar {
+      height: 3px;
+      background: #0f172a;
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+    .mirror-bar > div { height: 100%; width: 0; background: #3b82f6; transition: width 0.9s linear; }
+    .mirror-caption {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.72rem;
+      color: #94a3b8;
+      margin-top: 6px;
+    }
+    .mirror-caption .label { color: #f1f5f9; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mirror-caption .countdown { flex-shrink: 0; color: #64748b; }
 
     .diagnosis {
       background: #0f172a;
@@ -62,10 +126,6 @@
     .diagnosis .summary { font-weight: 600; font-size: 0.85rem; color: #f1f5f9; }
     .diagnosis .cause { font-size: 0.75rem; color: #94a3b8; margin-top: 6px; line-height: 1.45; }
     .diagnosis .action { font-size: 0.75rem; color: #7dd3fc; margin-top: 6px; line-height: 1.45; }
-
-    .now { font-size: 0.75rem; color: #94a3b8; margin-bottom: 12px; }
-    .now .title { color: #f1f5f9; font-weight: 600; font-size: 0.8rem; }
-    .now .url { color: #475569; word-break: break-all; }
 
     .btn-row { display: flex; flex-wrap: wrap; gap: 6px; }
     .btn {
@@ -187,6 +247,54 @@
       text-align: center;
     }
 
+    /* --- Modal de ajuste visual --- */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.78);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 80;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      width: min(880px, 100%);
+      max-height: 100%;
+      overflow: auto;
+      padding: 20px;
+    }
+    .modal-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+    .modal-head .grow { flex: 1; min-width: 0; }
+    .modal-title { font-size: 1rem; font-weight: 600; color: #f8fafc; }
+    .modal-url { font-size: 0.7rem; color: #64748b; word-break: break-all; margin-top: 2px; }
+    .zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+    .zoom-controls input[type=range] { flex: 1; min-width: 160px; accent-color: #3b82f6; }
+    .zoom-presets { display: flex; gap: 4px; }
+    .zoom-meta { font-size: 0.72rem; color: #64748b; margin-top: 10px; line-height: 1.5; }
+    .zoom-note {
+      background: #0f172a;
+      border-left: 3px solid #f59e0b;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.73rem;
+      color: #94a3b8;
+      line-height: 1.5;
+      margin-top: 12px;
+    }
+    .modal-foot { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
+    .modal-foot .spacer { flex: 1; }
+
     #toast {
       position: fixed;
       right: 20px;
@@ -194,7 +302,7 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
-      z-index: 50;
+      z-index: 90;
       max-width: 420px;
     }
     .toast {
@@ -234,6 +342,33 @@
   <div id="linksList"></div>
 </div>
 
+<div class="modal-backdrop" id="zoomModal" onclick="if (event.target === this) closeZoom()">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="grow">
+        <div class="modal-title" id="zoomTitle"></div>
+        <div class="modal-url" id="zoomUrl"></div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="closeZoom()">Cerrar</button>
+    </div>
+    <div class="stage" id="zoomStage"></div>
+    <div class="zoom-controls">
+      <label style="font-size:0.8rem; color:#94a3b8">Zoom</label>
+      <input type="range" id="zoomRange" min="0.3" max="2" step="0.05" value="1">
+      <span class="interval-val" id="zoomVal">1.00</span>
+      <div class="zoom-presets" id="zoomPresets"></div>
+    </div>
+    <div class="zoom-meta" id="zoomMeta"></div>
+    <div id="zoomNote"></div>
+    <div class="modal-foot">
+      <div class="field" id="zoomScreenField" style="min-width:200px"></div>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost" onclick="closeZoom()">Cancelar</button>
+      <button class="btn btn-primary" id="zoomSaveBtn" onclick="saveZoom()">Guardar zoom</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -242,6 +377,16 @@
   let editingLinkId = null;   // link cuyo formulario esta abierto
   let addingLink = false;
   let playlistDraft = {};     // cc_id -> array de link ids sin aplicar todavia
+  let cardsKey = '';          // firma de las tarjetas dibujadas: solo se reconstruyen si cambia
+  let mirrorPrefs = loadMirrorPrefs();   // cc_id -> bool (mostrar el espejo)
+  let slotClock = {};         // cc_id -> {seconds, at} para animar la barra entre polls
+  let zoomEditor = null;      // {linkId, ccId, value, previewSrc, mode} mientras el modal esta abierto
+
+  // Un solo observer reescala todos los "stage": el frame se dibuja al tamano
+  // real del viewport y se encoge por transform, igual que en la display page.
+  const stageObserver = new ResizeObserver(entries => {
+    for (const entry of entries) scaleStage(entry.target);
+  });
 
   function esc(value) {
     return String(value === null || value === undefined ? '' : value)
@@ -287,64 +432,218 @@
   }
 
   function render() {
-    renderScreens();
+    syncScreens();
     if (!formOpen()) {
       renderAddForm();
       renderLinks();
     }
+    refreshZoomAsset();
     if (!sliderActive) {
       document.getElementById('slider').value = state.interval_seconds;
       document.getElementById('sliderVal').textContent = state.interval_seconds;
     }
   }
 
+  // --- Escalado de previews ---
+
+  // El frame vive a tamano de viewport real y se encoge hasta la caja: misma
+  // matematica que /cast/display, asi que el preview es lo que se va a ver.
+  function scaleStage(stage) {
+    const frame = stage.querySelector('.stage-frame');
+    if (!frame) return;
+    const vw = parseFloat(frame.dataset.vw);
+    const vh = parseFloat(frame.dataset.vh);
+    const box = stage.getBoundingClientRect();
+    if (!vw || !vh || !box.width) return;
+    frame.style.transform = `scale(${box.width / vw}, ${box.height / vh})`;
+  }
+
+  function sizeStageFrame(stage, frame, vw, vh, aspectW, aspectH) {
+    stage.style.aspectRatio = `${aspectW} / ${aspectH}`;
+    frame.dataset.vw = vw;
+    frame.dataset.vh = vh;
+    frame.style.width = vw + 'px';
+    frame.style.height = vh + 'px';
+    scaleStage(stage);
+  }
+
   // --- Pantallas ---
 
-  function renderScreens() {
+  function loadMirrorPrefs() {
+    try { return JSON.parse(localStorage.getItem('quiosco.mirrors')) || {}; }
+    catch (e) { return {}; }
+  }
+
+  function mirrorOn(ccId) {
+    return mirrorPrefs[ccId] !== false;   // por defecto encendido
+  }
+
+  function saveMirrorPrefs() {
+    try { localStorage.setItem('quiosco.mirrors', JSON.stringify(mirrorPrefs)); }
+    catch (e) { /* modo privado: la preferencia dura lo que la pestana */ }
+  }
+
+  function syncScreens() {
+    const key = state.chromecasts.map(cc => cc.id + ':' + (cc.resolution || []).join('x')).join('|');
+    if (key !== cardsKey) {
+      cardsKey = key;
+      buildScreenCards();
+    }
+    state.chromecasts.forEach(updateScreenCard);
+  }
+
+  // Las tarjetas se construyen una sola vez: el espejo es un iframe y volver a
+  // pintar el HTML cada 5s lo recargaria sin parar.
+  function buildScreenCards() {
     const el = document.getElementById('chromecasts');
     el.innerHTML = state.chromecasts.map(cc => {
-      const h = cc.health || { level: '', summary: '', cause: '', action: '' };
-      const hasLinks = (cc.playlist_link_ids || []).length > 0;
+      const [w, h] = cc.resolution || [1280, 720];
       return `
-      <div class="card">
+      <div class="card" id="card-${esc(cc.id)}">
         <div class="card-header">
-          <div class="dot ${esc(h.level)}"></div>
+          <div class="dot" data-role="dot"></div>
           <div>
             <div class="card-title">${esc(cc.name)}</div>
-            <div class="card-subtitle">${esc(cc.host)} &bull; ${esc(cc.id)}</div>
+            <div class="card-subtitle">${esc(cc.host)} &bull; ${esc(cc.id)} &bull; ${w}x${h}</div>
+          </div>
+          <div class="spacer"></div>
+          <button class="btn btn-ghost btn-sm" data-role="mirror-toggle"
+            onclick="toggleMirror('${esc(cc.id)}')"></button>
+        </div>
+
+        <div class="mirror">
+          <div class="stage" data-role="stage">
+            <div class="stage-empty" data-role="stage-empty"></div>
+            <div class="stage-badge">Espejo</div>
+          </div>
+          <div class="mirror-bar"><div data-role="progress"></div></div>
+          <div class="mirror-caption">
+            <span class="label" data-role="caption-label">&mdash;</span>
+            <span class="countdown" data-role="caption-countdown"></span>
           </div>
         </div>
 
-        <div class="diagnosis ${esc(h.level)}">
-          <div class="summary">${esc(h.summary)}</div>
-          ${h.cause ? `<div class="cause">${esc(h.cause)}</div>` : ''}
-          ${h.action ? `<div class="action">${esc(h.action)}</div>` : ''}
-        </div>
-
-        <div class="now">
-          En pantalla:
-          ${cc.current_label
-            ? `<span class="title">${esc(cc.current_label)}</span><div class="url">${esc(cc.current_url)}</div>`
-            : '<span class="url">—</span>'}
-        </div>
-
-        <div class="btn-row">
-          ${cc.rotating
-            ? `<button class="btn btn-stop" onclick="act('/api/chromecasts/${esc(cc.id)}/stop','POST')">&#9632; Detener</button>`
-            : `<button class="btn btn-start" ${!cc.connected || !hasLinks ? 'disabled' : ''}
-                 onclick="act('/api/chromecasts/${esc(cc.id)}/start','POST')">&#9654; Iniciar rotacion</button>`}
-          <button class="btn btn-ghost" ${!hasLinks ? 'disabled' : ''}
-            onclick="skip('${esc(cc.id)}',-1)" title="Link anterior">&#9664;</button>
-          <button class="btn btn-ghost" ${!hasLinks ? 'disabled' : ''}
-            onclick="skip('${esc(cc.id)}',1)" title="Link siguiente">&#9654;</button>
-          <button class="btn btn-ghost" ${!cc.connected ? 'disabled' : ''}
-            onclick="act('/api/chromecasts/${esc(cc.id)}/relaunch','POST','Pantalla relanzada')"
-            title="Recargar la display page en el Chromecast">&#8635; Relanzar</button>
-        </div>
-
-        ${renderPlaylistBox(cc)}
+        <div class="diagnosis" data-role="diag"></div>
+        <div class="btn-row" data-role="btns"></div>
+        <div data-role="playlist"></div>
       </div>`;
     }).join('');
+
+    state.chromecasts.forEach(cc => {
+      const stage = document.querySelector(`#card-${CSS.escape(cc.id)} [data-role=stage]`);
+      const [w, h] = cc.resolution || [1280, 720];
+      stage.style.aspectRatio = `${w} / ${h}`;
+      stageObserver.observe(stage);
+      applyMirror(cc.id);
+    });
+  }
+
+  function applyMirror(ccId) {
+    const card = document.getElementById('card-' + ccId);
+    if (!card) return;
+    const cc = state.chromecasts.find(c => c.id === ccId);
+    const stage = card.querySelector('[data-role=stage]');
+    const empty = card.querySelector('[data-role=stage-empty]');
+    const toggle = card.querySelector('[data-role=mirror-toggle]');
+    const existing = stage.querySelector('.stage-frame');
+    const wanted = mirrorOn(ccId) && !document.hidden;
+
+    toggle.textContent = mirrorOn(ccId) ? 'Ocultar espejo' : 'Ver espejo';
+
+    if (!wanted) {
+      if (existing) existing.remove();
+      empty.style.display = 'flex';
+      empty.textContent = mirrorOn(ccId)
+        ? 'Espejo en pausa mientras la pestana esta en segundo plano'
+        : 'Espejo apagado';
+      return;
+    }
+    if (existing) return;
+
+    const [w, h] = (cc && cc.resolution) || [1280, 720];
+    const frame = document.createElement('iframe');
+    frame.className = 'stage-frame';
+    // preview=1: este poll NO cuenta como heartbeat del watchdog, para que una
+    // pestana abierta aca no haga pasar por viva una pantalla muerta.
+    frame.src = `/cast/display?cc_id=${encodeURIComponent(ccId)}&preview=1`;
+    frame.setAttribute('scrolling', 'no');
+    stage.appendChild(frame);
+    sizeStageFrame(stage, frame, w, h, w, h);
+    empty.style.display = 'none';
+  }
+
+  function toggleMirror(ccId) {
+    mirrorPrefs[ccId] = !mirrorOn(ccId);
+    saveMirrorPrefs();
+    applyMirror(ccId);
+  }
+
+  function updateScreenCard(cc) {
+    const card = document.getElementById('card-' + cc.id);
+    if (!card) return;
+    const h = cc.health || { level: '', summary: '', cause: '', action: '' };
+    const hasLinks = (cc.playlist_link_ids || []).length > 0;
+
+    card.querySelector('[data-role=dot]').className = 'dot ' + (h.level || '');
+
+    const diag = card.querySelector('[data-role=diag]');
+    diag.className = 'diagnosis ' + (h.level || '');
+    diag.innerHTML = `
+      <div class="summary">${esc(h.summary)}</div>
+      ${h.cause ? `<div class="cause">${esc(h.cause)}</div>` : ''}
+      ${h.action ? `<div class="action">${esc(h.action)}</div>` : ''}`;
+
+    const captionLabel = card.querySelector('[data-role=caption-label]');
+    captionLabel.textContent = cc.current_label || '—';
+    captionLabel.title = cc.current_url || '';
+
+    // El reloj del slot se resincroniza en cada poll y se interpola entre polls.
+    if (cc.rotating && cc.seconds_on_current !== null && cc.seconds_on_current !== undefined) {
+      slotClock[cc.id] = { seconds: cc.seconds_on_current, at: Date.now() };
+    } else {
+      delete slotClock[cc.id];
+    }
+    tickSlot(cc.id);
+
+    card.querySelector('[data-role=btns]').innerHTML = `
+      ${cc.rotating
+        ? `<button class="btn btn-stop" onclick="act('/api/chromecasts/${esc(cc.id)}/stop','POST')">&#9632; Detener</button>`
+        : `<button class="btn btn-start" ${!cc.connected || !hasLinks ? 'disabled' : ''}
+             onclick="act('/api/chromecasts/${esc(cc.id)}/start','POST')">&#9654; Iniciar rotacion</button>`}
+      <button class="btn btn-ghost" ${!hasLinks ? 'disabled' : ''}
+        onclick="skip('${esc(cc.id)}',-1)" title="Link anterior">&#9664;</button>
+      <button class="btn btn-ghost" ${!hasLinks ? 'disabled' : ''}
+        onclick="skip('${esc(cc.id)}',1)" title="Link siguiente">&#9654;</button>
+      <button class="btn btn-ghost" ${!cc.connected ? 'disabled' : ''}
+        onclick="act('/api/chromecasts/${esc(cc.id)}/relaunch','POST','Pantalla relanzada')"
+        title="Recargar la display page en el Chromecast">&#8635; Relanzar</button>
+      <a class="btn btn-ghost" style="text-decoration:none" target="_blank" rel="noopener noreferrer"
+        href="/cast/display?cc_id=${esc(cc.id)}&preview=1"
+        title="Abrir el espejo en tamano completo">&#9974; Ampliar</a>`;
+
+    const playlistSlot = card.querySelector('[data-role=playlist]');
+    if (!formOpen() || !playlistSlot.innerHTML.trim()) {
+      playlistSlot.innerHTML = renderPlaylistBox(cc);
+    }
+  }
+
+  // Barra y cuenta regresiva del slot actual, una vez por segundo.
+  function tickSlot(ccId) {
+    const card = document.getElementById('card-' + ccId);
+    if (!card) return;
+    const bar = card.querySelector('[data-role=progress]');
+    const countdown = card.querySelector('[data-role=caption-countdown]');
+    const clock = slotClock[ccId];
+    if (!clock) {
+      bar.style.width = '0';
+      countdown.textContent = 'sin rotacion';
+      return;
+    }
+    const interval = state.interval_seconds || 1;
+    const elapsed = clock.seconds + (Date.now() - clock.at) / 1000;
+    const left = Math.max(0, Math.round(interval - elapsed));
+    bar.style.width = Math.min(100, (elapsed / interval) * 100) + '%';
+    countdown.textContent = 'cambia en ' + left + 's';
   }
 
   function renderPlaylistBox(cc) {
@@ -393,10 +692,16 @@
       </div>`;
   }
 
+  function repaintPlaylist(ccId) {
+    const card = document.getElementById('card-' + ccId);
+    const cc = state.chromecasts.find(c => c.id === ccId);
+    if (card && cc) card.querySelector('[data-role=playlist]').innerHTML = renderPlaylistBox(cc);
+  }
+
   function openPlaylist(ccId) {
     const cc = state.chromecasts.find(c => c.id === ccId);
     playlistDraft[ccId] = (cc.playlist === null ? state.links.map(l => l.id) : cc.playlist).slice();
-    renderScreens();
+    repaintPlaylist(ccId);
   }
 
   function cancelPlaylist(ccId) {
@@ -408,7 +713,7 @@
     const draft = playlistDraft[ccId];
     const at = draft.indexOf(linkId);
     if (at === -1) draft.push(linkId); else draft.splice(at, 1);
-    renderScreens();
+    repaintPlaylist(ccId);
   }
 
   function movePlaylistItem(ccId, linkId, delta) {
@@ -417,7 +722,7 @@
     const to = at + delta;
     if (at === -1 || to < 0 || to >= draft.length) return;
     draft.splice(to, 0, draft.splice(at, 1)[0]);
-    renderScreens();
+    repaintPlaylist(ccId);
   }
 
   function usePlaylistAll(ccId) {
@@ -477,12 +782,14 @@
             ${link.optional ? '<span class="badge">Opcional</span>' : ''}
             ${link.direct ? '<span class="badge">Directo</span>' : ''}
             ${isLive(link) ? '<span class="badge live">En vivo</span>' : ''}
-            ${!isLive(link) && usesGif(link.url) ? '<span class="badge gif">GIF</span>' : ''}
+            ${!isLive(link) && usesGif(link) ? '<span class="badge gif">GIF</span>' : ''}
           </div>
         </div>
         <div class="link-actions">
+          <button class="btn btn-primary btn-sm" onclick="openZoom('${esc(link.id)}')"
+            title="Ver como entra en pantalla y ajustar el zoom">&#9635; Ajustar</button>
           ${state.chromecasts.map(cc => `
-            <button class="btn btn-primary btn-sm" title="Castear a ${esc(cc.name)} ahora"
+            <button class="btn btn-ghost btn-sm" title="Castear a ${esc(cc.name)} ahora"
               ${!cc.connected ? 'disabled' : ''}
               onclick="castLink('${esc(cc.id)}','${esc(link.id)}')">
               &#9654; ${esc(shortName(cc.name))}
@@ -490,7 +797,7 @@
           <button class="btn btn-ghost btn-sm" onclick="toggleEnabled('${esc(link.id)}',${!link.enabled})">
             ${link.enabled ? 'Deshabilitar' : 'Habilitar'}
           </button>
-          ${!isLive(link) && usesGif(link.url)
+          ${!isLive(link) && usesGif(link)
             ? `<button class="btn btn-ghost btn-sm" onclick="recapture('${esc(link.id)}')"
                  title="Recapturar el GIF ahora, sin esperar el ciclo de 5 min">&#8635; GIF</button>`
             : ''}
@@ -501,12 +808,10 @@
     }).join('');
   }
 
-  // Espejo de SCREENSHOT_SITES y del host PRTG en main.py: solo para decidir si
-  // se ofrece el boton de recaptura.
-  const GIF_HOSTS = ['cipotato.org', 'www.cgiar.org', 'cgiar.org', 'stats.uptimerobot.com', '172.25.0.22'];
-
-  function usesGif(url) {
-    return GIF_HOSTS.some(host => String(url).includes(host));
+  // El backend ya dice como se renderiza cada link (preview_mode); la consola
+  // no vuelve a adivinar por dominio.
+  function usesGif(link) {
+    return link.preview_mode === 'screenshot' && !isLive(link);
   }
 
   function isLive(link) {
@@ -552,7 +857,7 @@
         <div class="form-hint">
           <strong>Opcional</strong>: si no responde se salta en la rotacion en vez de mostrar un error.
           <strong>Directo</strong>: se carga sin pasar por el proxy, para apps de la misma red que los Chromecasts.
-          <strong>Zoom</strong> menor a 1 muestra mas contenido en pantalla.
+          <strong>Zoom</strong> menor a 1 muestra mas contenido en pantalla; el boton Ajustar deja verlo antes de guardar.
           <strong>Captura en vivo</strong>: para paginas que no se dejan embeber; se publica un PNG
           que se refresca cada pocos segundos. Al pasar un link a este modo hay que reiniciar el
           servicio para que arranque su captura.
@@ -666,6 +971,168 @@
     fetchStatus();
   }
 
+  // --- Ajuste visual del zoom ---
+
+  const ZOOM_PRESETS = [0.5, 0.6, 0.75, 0.9, 1, 1.25];
+
+  function openZoom(linkId) {
+    const link = state.links.find(l => l.id === linkId);
+    if (!link) return;
+    const cc = state.chromecasts[0];
+    zoomEditor = {
+      linkId,
+      ccId: cc ? cc.id : null,
+      value: Number(link.zoom) || 1,
+      previewSrc: link.preview_src,
+      mode: link.preview_mode
+    };
+
+    document.getElementById('zoomTitle').textContent = 'Ajustar: ' + link.label;
+    document.getElementById('zoomUrl').textContent = link.url;
+    document.getElementById('zoomPresets').innerHTML = ZOOM_PRESETS.map(z =>
+      `<button class="btn btn-ghost btn-sm" onclick="setZoom(${z})">${z}</button>`).join('');
+    document.getElementById('zoomScreenField').innerHTML = state.chromecasts.length > 1
+      ? `<label>Pantalla de referencia</label>
+         <select onchange="setZoomScreen(this.value)">
+           ${state.chromecasts.map(c => `<option value="${esc(c.id)}">${esc(c.name)} — ${(c.resolution || [1280, 720]).join('x')}</option>`).join('')}
+         </select>`
+      : '';
+    document.getElementById('zoomRange').value = zoomEditor.value;
+
+    buildZoomStage();
+    applyZoom();
+    document.getElementById('zoomModal').classList.add('open');
+  }
+
+  function zoomResolution() {
+    const cc = state.chromecasts.find(c => c.id === (zoomEditor && zoomEditor.ccId));
+    return (cc && cc.resolution) || [1280, 720];
+  }
+
+  // El elemento del preview se crea una sola vez por apertura: mover el slider
+  // solo cambia su tamano, para no recargar la pagina embebida en cada paso.
+  function buildZoomStage() {
+    const stage = document.getElementById('zoomStage');
+    stage.innerHTML = '';
+    const frame = zoomEditor.mode === 'screenshot'
+      ? document.createElement('img')
+      : document.createElement('iframe');
+    frame.className = 'stage-frame';
+    if (zoomEditor.mode === 'screenshot') {
+      frame.style.objectFit = 'fill';   // igual que en la display page
+    } else {
+      frame.setAttribute('scrolling', 'no');
+    }
+    frame.src = zoomEditor.previewSrc;
+    stage.appendChild(frame);
+    stageObserver.observe(stage);
+  }
+
+  function applyZoom() {
+    const [w, h] = zoomResolution();
+    const zoom = zoomEditor.value;
+    const vw = Math.round(w / zoom);
+    const vh = Math.round(h / zoom);
+    const stage = document.getElementById('zoomStage');
+    const frame = stage.querySelector('.stage-frame');
+    if (frame) sizeStageFrame(stage, frame, vw, vh, w, h);
+
+    document.getElementById('zoomVal').textContent = zoom.toFixed(2);
+    document.getElementById('zoomMeta').textContent =
+      `Pantalla ${w}x${h} · la pagina se carga a ${vw}x${vh} y se encoge a ${zoom.toFixed(2)}x. ` +
+      `Zoom menor entra mas contenido, con letra mas chica.`;
+
+    const isScreenshot = zoomEditor.mode === 'screenshot';
+    document.getElementById('zoomNote').innerHTML = isScreenshot
+      ? `<div class="zoom-note">Este link se muestra como captura, no como pagina embebida: la imagen
+         siempre ocupa toda la pantalla y el zoom solo cambia cuanto contenido entra en la
+         <strong>proxima captura</strong>. Guarda y recaptura para ver el resultado real aca.</div>`
+      : '';
+    document.getElementById('zoomSaveBtn').textContent = isScreenshot
+      ? 'Guardar y recapturar' : 'Guardar zoom';
+  }
+
+  function setZoom(value) {
+    zoomEditor.value = Math.min(4, Math.max(0.1, Number(value)));
+    document.getElementById('zoomRange').value = zoomEditor.value;
+    applyZoom();
+  }
+
+  function setZoomScreen(ccId) {
+    zoomEditor.ccId = ccId;
+    applyZoom();
+  }
+
+  // Tras recapturar, el asset cambia de revision en /api/status: se refresca la
+  // imagen sin cerrar el modal.
+  function refreshZoomAsset() {
+    if (!zoomEditor || zoomEditor.mode !== 'screenshot') return;
+    const link = state.links.find(l => l.id === zoomEditor.linkId);
+    if (!link || link.preview_src === zoomEditor.previewSrc) return;
+    zoomEditor.previewSrc = link.preview_src;
+    const frame = document.querySelector('#zoomStage .stage-frame');
+    if (frame) frame.src = link.preview_src;
+  }
+
+  async function saveZoom() {
+    const { linkId, value, mode } = zoomEditor;
+    try {
+      await api('PATCH', '/api/links/' + linkId, { zoom: value });
+    } catch (e) { return; }
+    if (mode === 'screenshot') {
+      try {
+        await api('POST', `/api/links/${linkId}/recapture`);
+        toast('Zoom guardado. Recaptura encolada: el preview se actualiza en unos segundos.');
+      } catch (e) { /* ya informado */ }
+    } else {
+      closeZoom();
+      toast('Zoom guardado. Las pantallas lo toman en el proximo refresco (2s).');
+    }
+    fetchStatus();
+  }
+
+  function closeZoom() {
+    zoomEditor = null;
+    document.getElementById('zoomModal').classList.remove('open');
+    document.getElementById('zoomStage').innerHTML = '';
+  }
+
+  document.getElementById('zoomRange').addEventListener('input', e => {
+    if (zoomEditor) setZoom(e.target.value);
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && zoomEditor) closeZoom();
+  });
+
+  // El espejo avisa cuando cambia de link. Sin esto el pie y la barra van al
+  // ritmo del poll de /api/status (5s) y se ven desfasados de lo que ya cambio
+  // en la miniatura.
+  window.addEventListener('message', event => {
+    if (event.origin !== window.location.origin) return;
+    const msg = event.data;
+    if (!msg || msg.quiosco !== 'current') return;
+    const cc = state.chromecasts.find(c => c.id === msg.ccId);
+    if (!cc) return;
+    const link = state.links.find(l => l.id === msg.linkId);
+    cc.current_label = link ? link.label : null;
+    cc.current_url = link ? link.url : null;
+    if (msg.rotating) slotClock[cc.id] = { seconds: 0, at: Date.now() };
+    const card = document.getElementById('card-' + cc.id);
+    if (card) {
+      const label = card.querySelector('[data-role=caption-label]');
+      label.textContent = cc.current_label || '—';
+      label.title = cc.current_url || '';
+    }
+    tickSlot(cc.id);
+  });
+
+  // Con la pestana en segundo plano los espejos se sueltan: cada uno arrastra
+  // los iframes reales de la rotacion (proxy PRTG incluido).
+  document.addEventListener('visibilitychange', () => {
+    state.chromecasts.forEach(cc => applyMirror(cc.id));
+  });
+
   // --- Intervalo ---
 
   const slider = document.getElementById('slider');
@@ -686,6 +1153,7 @@
 
   fetchStatus();
   setInterval(fetchStatus, 5000);
+  setInterval(() => state.chromecasts.forEach(cc => tickSlot(cc.id)), 1000);
 </script>
 </body>
 </html>

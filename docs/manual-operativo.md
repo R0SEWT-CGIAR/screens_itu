@@ -325,6 +325,15 @@ la nueva revision en su poll de 2s y se recarga sola, sin relanzar DashCast.
 
 Por pantalla:
 
+- Espejo en vivo: la miniatura 16:9 de la tarjeta carga la misma display page que el
+  Chromecast (`/cast/display?cc_id=<id>&preview=1`), asi que muestra lo que hay en
+  pantalla ahora, con el nombre del link y cuanto falta para el proximo cambio. Es de
+  solo mirar: los clics no llegan a la pagina espejada, y `Ampliar` la abre en una
+  pestana. `Ocultar espejo` lo apaga (la preferencia queda en ese navegador) y con la
+  pestana en segundo plano se suelta solo: cada espejo arrastra los iframes reales de la
+  rotacion, proxy PRTG incluido, asi que consume igual que una pantalla mas.
+  El poll del espejo lleva `preview=1` y **no** cuenta como heartbeat del watchdog: una
+  pestana abierta en la oficina no puede hacer pasar por viva una pantalla muerta.
 - Iniciar y detener rotacion.
 - Saltar al link anterior o siguiente sin esperar el intervalo.
 - `Relanzar`: recarga la display page en el Chromecast. Es el primer arreglo a probar
@@ -335,6 +344,12 @@ Por pantalla:
 
 Sobre los links:
 
+- `Ajustar`: previsualiza el link a la resolucion real de la pantalla (la caja 16:9 usa
+  el mismo `/proxy/`, `/p/` o asset de screenshot que la display page) y deja mover el
+  zoom viendo el resultado antes de guardar. Al guardar, las pantallas lo toman en su
+  poll de 2s. En links que se muestran como captura el zoom solo cambia cuanto contenido
+  entra en la **proxima** captura, asi que ahi el boton guarda y encola la recaptura, y
+  el preview se actualiza solo cuando el asset nuevo esta listo.
 - Agregar, editar (URL, nombre, zoom, opcional, directo, como se muestra) y borrar.
 - Reordenar con las flechas.
 - Habilitar / deshabilitar: un link deshabilitado sale de la rotacion de todas las

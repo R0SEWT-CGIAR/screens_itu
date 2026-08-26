@@ -102,6 +102,10 @@ class CastState:
     resolution: tuple[int, int] = (1920, 1080)
     last_display_launch_monotonic: Optional[float] = None
     last_heartbeat_monotonic: Optional[float] = None
+    # Marca del ultimo cambio de link hecho por el loop de rotacion: la consola
+    # la usa para dibujar cuanto falta para el proximo. Un skip manual no la
+    # toca porque el skip no interrumpe el sleep del loop.
+    last_switch_monotonic: Optional[float] = None
     dashcast_failures: int = 0
     fallback_active: bool = False
     last_fallback_retry_monotonic: Optional[float] = None
@@ -449,6 +453,7 @@ class CastManager:
                 if not await asyncio.to_thread(self._link_available, self._current_link(state)):
                     await asyncio.to_thread(self._advance_index, state)
                 self._sync_current_link_state(state)
+                state.last_switch_monotonic = time.monotonic()
                 logger.info(
                     "Rotando a [%d] %s en %s",
                     state.current_index,
@@ -1011,6 +1016,12 @@ class CastManager:
                     "heartbeat_age_seconds": (
                         round(time.monotonic() - s.last_heartbeat_monotonic, 1)
                         if s.last_heartbeat_monotonic is not None
+                        else None
+                    ),
+                    "resolution": list(s.resolution),
+                    "seconds_on_current": (
+                        round(time.monotonic() - s.last_switch_monotonic, 1)
+                        if s.last_switch_monotonic is not None
                         else None
                     ),
                     "last_seen_at": s.last_seen_at,

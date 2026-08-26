@@ -72,7 +72,9 @@ Campos principales:
 - `live_screenshot_interval_seconds`: frecuencia de PNGs en vivo; por defecto, 2 segundos
 
 La consola web (`http://<servidor>:8000/`) edita `config.json` en caliente: links,
-playlists por pantalla e intervalo. Guarda un backup en `data/config-backups/` antes de
+playlists por pantalla e intervalo. Cada tarjeta de pantalla trae un espejo en vivo de lo
+que se esta viendo en ese Chromecast, y cada link un boton `Ajustar` que previsualiza la
+pagina a la resolucion real de la pantalla mientras se mueve el zoom. Guarda un backup en `data/config-backups/` antes de
 cada escritura. Con el servicio arriba conviene configurar desde ahi y no por SSH, porque
 el proceso tiene la configuracion en memoria y el proximo guardado sobreescribe el archivo.
 
