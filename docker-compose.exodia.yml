@@ -15,6 +15,10 @@ services:
     init: true
     network_mode: host
     environment:
+      # El contenedor corre en UTC si no se dice lo contrario, y los paneles
+      # sellan la hora con datetime.now(): sin esto el reloj sale 5 h
+      # adelantado. La imagen ya trae tzdata.
+      - TZ=${TZ:-America/Lima}
       - PROXY_BASE=${PROXY_BASE:-http://172.25.21.37:8000}
       # Credenciales de PRTG para /panel/prtg. Viven en el .env de la
       # maquina, nunca en config.json: ese se lee por SSH, se respalda y
