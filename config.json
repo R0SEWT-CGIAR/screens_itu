@@ -36,9 +36,10 @@
   ],
   "links": [
     {
-      "url": "https://172.25.0.22/public/mapshow.htm?id=5254&mapid=756289B0-4176-4C48-AB30-EF8F48B6D9BD",
-      "label": "Servicios activos",
-      "zoom": 1.0
+      "url": "http://172.25.21.37:8000/panel/prtg",
+      "label": "Estado de la red",
+      "zoom": 1.0,
+      "id": "1ea941f1"
     },
     {
       "id": "5cc23bf3",
@@ -82,5 +83,12 @@
     "hidden": [
       "cipotato.org deface"
     ]
+  },
+  "prtg_panel": {
+    "base_url": "https://172.25.0.22",
+    "refresh_seconds": 60,
+    "max_issues": 8,
+    "show_unusual": false,
+    "hidden_groups": []
   }
 }

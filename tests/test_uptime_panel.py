@@ -233,7 +233,8 @@ class RenderTest(unittest.TestCase):
         html = uptime_panel.render_html(view, refresh_seconds=60)
         self.assertIn("Servicio X", html)
         self.assertIn('id="datos"', html)
-        self.assertIn("setInterval(refrescar, 60000)", html)
+        self.assertIn("refrescar('/api/uptime-panel')", html)
+        self.assertIn("60000)", html)
 
     def test_el_json_embebido_no_puede_cerrar_el_script(self):
         view = uptime_panel.build_view({"data": [_monitor("</script><b>x")]})

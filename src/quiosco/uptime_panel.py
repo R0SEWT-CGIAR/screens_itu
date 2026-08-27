@@ -34,6 +34,8 @@ from typing import Optional
 
 import httpx
 
+from . import panel_ui
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_SOURCE_URL = "https://stats.uptimerobot.com/api/getMonitorList/26r4CjSckG"
@@ -311,78 +313,23 @@ class PanelCache:
 # --- Render ---
 
 _STYLE = """
-  * { margin:0; padding:0; box-sizing:border-box; }
-  :root {
-    --superficie:#1a1a19; --plano:#0d0d0d;
-    --tinta:#ffffff; --tinta-2:#c3c2b7; --tinta-3:#898781; --linea:#2c2c2a;
-    --ok:#0ca30c; --leve:#fab219; --grave:#ec835a; --caida:#d03b3b;
-  }
-  html,body { width:100%; height:100%; overflow:hidden; }
-  body {
-    background:var(--plano); color:var(--tinta);
-    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
-    display:flex; flex-direction:column; padding:18px 26px 14px;
-  }
-  header { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:12px; }
-  h1 { font-size:23px; font-weight:600; letter-spacing:-.01em; }
-  .reloj { font-size:16px; color:var(--tinta-3); font-variant-numeric:tabular-nums; }
-  .reloj .stale { color:var(--leve); }
-
-  .hero {
-    background:var(--superficie); border-radius:12px; padding:15px 24px; margin-bottom:12px;
-    display:flex; align-items:center; gap:15px; border-left:5px solid var(--ok);
-  }
-  .hero.caida { border-left-color:var(--caida); background:#241715; }
-  .hero-icono { font-size:25px; line-height:1; color:var(--ok); }
-  .hero.caida .hero-icono { color:var(--caida); }
-  .hero-txt { font-size:33px; font-weight:650; letter-spacing:-.02em; }
-  .hero-sub { margin-left:auto; font-size:16px; color:var(--tinta-3); }
-
-  table { width:100%; border-collapse:collapse; flex:1; }
-  td, th { padding:0 8px; vertical-align:middle; }
-  .eje th { font-size:12px; font-weight:400; color:var(--tinta-3); padding-bottom:5px; }
+  table { flex:1; }
   .eje .strip span { display:flex; justify-content:space-between; }
-
-  .fila { border-top:1px solid var(--linea); }
-  .fila.caida { background:#241715; }
-  .fila.caida td:first-child { box-shadow:inset 4px 0 0 var(--caida); }
-
-  .estado { width:150px; padding-left:12px; white-space:nowrap; }
-  .punto {
-    display:inline-block; width:11px; height:11px; border-radius:50%;
-    background:var(--ok); margin-right:9px; vertical-align:middle;
-  }
-  /* Rombo, no circulo: la forma distingue caido de operativo sin el color. */
-  .fila.caida .punto { background:var(--caida); border-radius:2px; transform:rotate(45deg); }
-  .etiqueta { font-size:16px; color:var(--tinta-2); vertical-align:middle; }
-  .fila.caida .etiqueta { color:var(--caida); font-weight:650; }
-
+  .estado { width:150px; }
   .nombre { font-size:24px; font-weight:550; letter-spacing:-.01em; line-height:1.15; }
   .nota { display:block; font-size:14px; color:var(--tinta-3); font-weight:400; margin-top:2px; }
-
   .strip { width:434px; }
   .celdas { display:flex; align-items:flex-end; gap:2px; height:34px; }
   .celda { width:12px; border-radius:3px; background:var(--ok); }
   .celda.leve { background:var(--leve); }
   .celda.grave { background:var(--grave); }
   .celda.caida { background:var(--caida); }
-
   .pct {
     width:104px; text-align:right; padding-right:0;
     font-size:23px; font-variant-numeric:tabular-nums; color:var(--tinta-2);
   }
   .fila.caida .pct { color:var(--tinta); }
   .signo { font-size:15px; color:var(--tinta-3); margin-left:2px; }
-
-  footer {
-    display:flex; align-items:center; gap:20px; margin-top:9px; padding-top:10px;
-    border-top:1px solid var(--linea); font-size:14px; color:var(--tinta-3);
-  }
-  .leyenda { display:flex; align-items:center; gap:15px; }
-  .clave { display:flex; align-items:center; gap:6px; }
-  .clave i { width:11px; border-radius:2px; display:inline-block; }
-  .fuente { margin-left:auto; }
-  .aviso { color:var(--leve); }
 """
 
 # El render vive solo en JS y corre tambien en la primera pintura, sobre el JSON
@@ -393,9 +340,7 @@ _SCRIPT = """
 const ALTO_OK = 22, ALTO_MAL = 34;
 
 function pintar(v) {
-  document.getElementById('reloj').innerHTML = v.stale
-    ? `<span class="stale">datos de hace ${Math.round(v.age_seconds / 60)} min</span>`
-    : `actualizado ${v.clock}`;
+  pintarReloj(v);
 
   const hero = document.getElementById('hero');
   hero.className = 'hero ' + (v.problem ? 'caida' : 'ok');
@@ -405,7 +350,7 @@ function pintar(v) {
     ? `último incidente ${v.incident.when} \\u00B7 ${v.incident.duration}`
     : 'sin incidentes registrados';
 
-  const filas = v.monitors.map(m => {
+  document.getElementById('filas').innerHTML = v.monitors.map(m => {
     const celdas = m.cells.map(c =>
       `<i class="celda ${c.band}" style="height:${c.band === 'ok' ? ALTO_OK : ALTO_MAL}px"></i>`
     ).join('');
@@ -419,43 +364,13 @@ function pintar(v) {
       <td class="pct">${m.ratio_text}<span class="signo">%</span></td>
     </tr>`;
   }).join('');
-
-  document.getElementById('filas').innerHTML = filas;
-}
-
-function escapar(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-async function refrescar() {
-  try {
-    const r = await fetch('/api/uptime-panel', { cache: 'no-store' });
-    if (r.ok) pintar(await r.json());
-  } catch (e) {
-    // Se mantiene la pintura anterior: mejor un dato de hace un rato que un
-    // parpadeo o una pantalla vacia en recepcion.
-  }
 }
 
 pintar(JSON.parse(document.getElementById('datos').textContent));
-setInterval(refrescar, REFRESH_MS);
+setInterval(() => refrescar('/api/uptime-panel'), REFRESH_MS);
 """
 
-
-def render_html(view: dict, *, refresh_seconds: float) -> str:
-    """Pagina completa del panel, con la vista inicial embebida."""
-    datos = html.escape(json.dumps(view, ensure_ascii=False), quote=False)
-    script = _SCRIPT.replace("REFRESH_MS", str(int(refresh_seconds * 1000)))
-    return f"""<!DOCTYPE html>
-<html lang="es"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Estado de servicios</title>
-<style>{_STYLE}</style>
-</head>
-<body>
+_BODY = """
   <header>
     <h1>Estado de servicios</h1>
     <span class="reloj" id="reloj"></span>
@@ -485,23 +400,21 @@ def render_html(view: dict, *, refresh_seconds: float) -> str:
     </span>
     <span class="fuente">cada celda = 3 días, se muestra el peor · fuente UptimeRobot</span>
   </footer>
+"""
 
-<script type="application/json" id="datos">{datos}</script>
-<script>{script}</script>
-</body></html>"""
+
+def render_html(view: dict, *, refresh_seconds: float) -> str:
+    """Pagina completa del panel, con la vista inicial embebida."""
+    return panel_ui.page(
+        title="Estado de servicios",
+        style=_STYLE,
+        body=_BODY,
+        view=view,
+        script=panel_ui.SCRIPT_COMUN + _SCRIPT,
+        refresh_seconds=refresh_seconds,
+    )
 
 
 def render_error_html(message: str) -> str:
     """Pagina de ultimo recurso: no hay ni una vista buena en cache."""
-    return f"""<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><title>Estado de servicios</title>
-<style>{_STYLE}
-  .vacio {{ margin:auto; text-align:center; color:var(--tinta-3); }}
-  .vacio strong {{ display:block; font-size:28px; color:var(--tinta-2); margin-bottom:8px; font-weight:600; }}
-</style></head>
-<body>
-  <div class="vacio">
-    <strong>Estado de servicios no disponible</strong>
-    {html.escape(message)}
-  </div>
-</body></html>"""
+    return panel_ui.error_page("Estado de servicios", message)

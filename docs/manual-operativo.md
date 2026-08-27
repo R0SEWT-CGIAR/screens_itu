@@ -538,6 +538,48 @@ El link en `config.json` se guarda con URL absoluta sobre `PROXY_BASE`
 algo real, pero el iframe se sirve relativo. Si cambia la IP del servidor hay
 que actualizar tambien esa URL.
 
+### Panel de estado de la red (PRTG)
+
+`GET /panel/prtg` reemplaza al mapa publico de PRTG que antes se casteaba como
+`live_screenshot`. Eso era una pagina de Chromium abierta de forma permanente y
+fotografiada cada 2s; leyendo la API de PRTG el panel queda en vivo de verdad y
+se apaga el proceso mas caro del contenedor.
+
+**Credenciales**: `PRTG_USER` y `PRTG_PASSHASH` en el `.env` de la maquina, que
+el compose pasa al contenedor. NO van en `config.json`: ese archivo se lee por
+SSH, se respalda y se edita desde la consola web. Se guarda el *passhash*, no la
+contrasena. Para (re)generarlo tras un cambio de clave:
+
+```bash
+ssh -t exodia
+read -rsp "PRTG pass: " P; echo
+H=$(curl -sk --get https://172.25.0.22/api/getpasshash.htm \
+      --data-urlencode username=USUARIO --data-urlencode "password=$P")
+printf "PRTG_USER=USUARIO\nPRTG_PASSHASH=%s\n" "$H" > ~/quiosco/.env
+chmod 600 ~/quiosco/.env; unset P H
+cd ~/quiosco && docker compose up -d
+```
+
+Config en el bloque `prtg_panel` de `config.json`:
+
+| Clave | Para que |
+| --- | --- |
+| `base_url` | Raiz de PRTG (por defecto `https://172.25.0.22`) |
+| `refresh_seconds` | Ventana de cache y periodo del poll (piso 15s) |
+| `max_issues` | Filas de incidencias que caben en pantalla (por defecto 8) |
+| `show_unusual` | Listar tambien los sensores en estado *Unusual* |
+| `hidden_groups` | Grupos de PRTG que no cuentan ni aparecen |
+
+**Que muestra y que no.** El panel no lista los 412 sensores ni los ~31 que no
+estan en verde: la mayoria de esos son *Unusual* con el mismo mensaje de trafico
+bajo en puertos de switch, y listarlos ahogaria al que si esta caido. Se muestra
+el conteo por estado mas el detalle de lo accionable (caidos, sin datos,
+alertas). Los pausados se avisan siempre en el pie aunque no sean un problema:
+un sensor pausado no se esta vigilando, y hoy son un tercio del arbol.
+
+Ojo con una distincion que el panel respeta: *Sin datos* no es lo mismo que
+*Caido*. El titular nombra una sola categoria con su numero exacto.
+
 ### Flujo de casting
 
 1. DashCast carga `GET /cast/display?cc_id=<id>`.

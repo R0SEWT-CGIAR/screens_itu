@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from pathlib import Path
 
-from . import config_store, health, uptime_panel
+from . import config_store, health, prtg_panel, uptime_panel
 from .cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
 from .runtime_monitor import start_runtime_monitor_task
 from .screenshot import start_live_screenshot_task, start_screenshot_task
@@ -96,17 +96,25 @@ proxy_client: httpx.AsyncClient | None = None
 # HTTPS a internet.
 panel_client: httpx.AsyncClient | None = None
 panel_cache = uptime_panel.PanelCache()
+# PRTG tiene certificado invalido, asi que su cliente va con verify=False —
+# mismo motivo que el proxy_client, pero con su propio timeout y sin seguir
+# redirecciones a ciegas.
+prtg_client: httpx.AsyncClient | None = None
+prtg_cache = prtg_panel.PanelCache()
 # Pedidos de recaptura de GIF desde la consola; la crea el lifespan.
 recapture_queue: "asyncio.Queue[str] | None" = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global proxy_client, panel_client
+    global proxy_client, panel_client, prtg_client
     proxy_client = httpx.AsyncClient(verify=False, timeout=30, follow_redirects=True)
     panel_client = httpx.AsyncClient(timeout=uptime_panel.DEFAULT_TIMEOUT_SECONDS,
                                      follow_redirects=True)
     panel_cache.ttl_seconds = uptime_panel.panel_settings(manager.config)["refresh_seconds"]
+    prtg_client = httpx.AsyncClient(verify=False,
+                                    timeout=prtg_panel.DEFAULT_TIMEOUT_SECONDS)
+    prtg_cache.ttl_seconds = prtg_panel.panel_settings(manager.config)["refresh_seconds"]
     manager.connect()
     # Sin esto un reboot deja los Chromecast conectados pero en negro: connect()
     # no rota. Los que no esten listos aun los recoge el watchdog.
@@ -161,6 +169,7 @@ async def lifespan(app: FastAPI):
     manager.disconnect()
     await proxy_client.aclose()
     await panel_client.aclose()
+    await prtg_client.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -570,6 +579,35 @@ async def uptime_panel_page():
         return HTMLResponse(uptime_panel.render_error_html(str(exc)), status_code=200)
     return HTMLResponse(
         uptime_panel.render_html(view, refresh_seconds=settings["refresh_seconds"])
+    )
+
+
+@app.get("/api/prtg-panel")
+async def prtg_panel_data():
+    """Vista del panel de red en JSON. La consume el poll de la propia pagina."""
+    settings = prtg_panel.panel_settings(manager.config)
+    try:
+        return await prtg_cache.get(settings, prtg_client)
+    except Exception as exc:  # noqa: BLE001 - sin cache previa no hay nada que servir
+        raise HTTPException(
+            status_code=503, detail=f"No se pudo leer PRTG: {type(exc).__name__}"
+        )
+
+
+@app.get("/panel/prtg", response_class=HTMLResponse)
+async def prtg_panel_page():
+    """Panel de estado de la red que reemplaza al mapa de PRTG casteado."""
+    settings = prtg_panel.panel_settings(manager.config)
+    try:
+        view = await prtg_cache.get(settings, prtg_client)
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(
+            prtg_panel.render_error_html(str(exc) if isinstance(exc, (ValueError, RuntimeError))
+                                         else type(exc).__name__),
+            status_code=200,
+        )
+    return HTMLResponse(
+        prtg_panel.render_html(view, refresh_seconds=settings["refresh_seconds"])
     )
 
 

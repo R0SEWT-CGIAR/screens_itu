@@ -11,12 +11,17 @@
 #   de su ultima IP conocida); igual se recomienda reserva DHCP.
 services:
   quiosco:
-    image: cipotato/quiosco:0.1.10
+    image: cipotato/quiosco:0.1.11
     init: true
     ports:
       - "8000:8000"
     environment:
       - PROXY_BASE=${PROXY_BASE:-}
+      # Credenciales de PRTG para /panel/prtg. Viven en el .env de la
+      # maquina, nunca en config.json: ese se lee por SSH, se respalda y
+      # se edita desde la consola web. Es el passhash, no la contrasena.
+      - PRTG_USER=${PRTG_USER:-}
+      - PRTG_PASSHASH=${PRTG_PASSHASH:-}
     volumes:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots
