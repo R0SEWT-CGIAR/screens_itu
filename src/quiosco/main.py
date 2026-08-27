@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from pathlib import Path
 
-from . import config_store, health
+from . import config_store, health, uptime_panel
 from .cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
 from .runtime_monitor import start_runtime_monitor_task
 from .screenshot import start_live_screenshot_task, start_screenshot_task
@@ -91,14 +91,22 @@ PROXY_BASE = _resolve_proxy_base()
 
 manager = CastManager(config_path=str(_CONFIG_PATH), proxy_base=PROXY_BASE)
 proxy_client: httpx.AsyncClient | None = None
+# Cliente aparte para el panel de uptime: proxy_client va con verify=False para
+# tragarse el certificado invalido de PRTG, y eso no se le presta a una llamada
+# HTTPS a internet.
+panel_client: httpx.AsyncClient | None = None
+panel_cache = uptime_panel.PanelCache()
 # Pedidos de recaptura de GIF desde la consola; la crea el lifespan.
 recapture_queue: "asyncio.Queue[str] | None" = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global proxy_client
+    global proxy_client, panel_client
     proxy_client = httpx.AsyncClient(verify=False, timeout=30, follow_redirects=True)
+    panel_client = httpx.AsyncClient(timeout=uptime_panel.DEFAULT_TIMEOUT_SECONDS,
+                                     follow_redirects=True)
+    panel_cache.ttl_seconds = uptime_panel.panel_settings(manager.config)["refresh_seconds"]
     manager.connect()
     # Sin esto un reboot deja los Chromecast conectados pero en negro: connect()
     # no rota. Los que no esten listos aun los recoge el watchdog.
@@ -152,6 +160,7 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(runtime_monitor_task, return_exceptions=True)
     manager.disconnect()
     await proxy_client.aclose()
+    await panel_client.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -408,6 +417,8 @@ def skip_link(cc_id: str, body: SkipRequest):
 # URLs que no se pueden proxear (Cloudflare JS challenge)
 SCREENSHOT_SITES = {"cipotato.org", "www.cgiar.org", "cgiar.org", "stats.uptimerobot.com"}
 DEFAULT_RESOLUTION = (1920, 1080)
+# Prefijo de las paginas que sirve el propio quiosco y se muestran como link.
+PANEL_PREFIX = "/panel/"
 
 
 def _cc_resolution(cc_id: str) -> tuple[int, int]:
@@ -447,18 +458,22 @@ def gif_capture_targets(
     """Links que necesitan GIF, re-resueltos en cada ciclo de captura.
 
     Capturamos las unproxyables (se muestran como screenshot) y tambien las
-    internas PRTG: esas siguen renderizando como iframe, pero su GIF sirve de
-    asset para el fallback via Default Media Receiver. Se re-resuelve en cada
-    ciclo para que un link agregado desde la consola obtenga su GIF sin
-    reiniciar el servicio. Los de captura en vivo quedan fuera: esos los atiende
-    el loop de PNG, que mantiene su propia pagina abierta.
+    internas PRTG y los paneles propios: esos siguen renderizando como iframe,
+    pero su GIF sirve de asset para el fallback via Default Media Receiver. Se
+    re-resuelve en cada ciclo para que un link agregado desde la consola obtenga
+    su GIF sin reiniciar el servicio. Los de captura en vivo quedan fuera: esos
+    los atiende el loop de PNG, que mantiene su propia pagina abierta.
     """
     selected = [
         l
         for l in links
         if l.get("enabled", True)
         and not _is_live_screenshot(l)
-        and (_use_screenshot(l["url"]) or _is_internal_url(l["url"]))
+        and (
+            _use_screenshot(l["url"])
+            or _is_internal_url(l["url"])
+            or _is_panel_url(l["url"])
+        )
     ]
     return [l["url"] for l in selected], _viewport_map(selected, cast_w, cast_h)
 
@@ -474,6 +489,16 @@ def live_capture_targets(
 def _is_internal_url(url: str) -> bool:
     parsed = urlparse(url)
     return PRTG_HOST in parsed.netloc
+
+
+def _is_panel_url(url: str) -> bool:
+    """Paginas que sirve el propio quiosco (p. ej. /panel/uptime).
+
+    Se guardan en config.json con URL absoluta sobre PROXY_BASE, porque el loop
+    de GIF necesita navegar a algo real y la clave del asset se deriva de esa
+    misma cadena. Para el iframe se reescriben a ruta relativa (ver
+    _iframe_src), que es lo robusto si algun dia cambia el host."""
+    return urlparse(url).path.startswith(PANEL_PREFIX)
 
 
 def _internal_links(links: list[dict] | None = None) -> list[dict]:
@@ -495,6 +520,11 @@ def _iframe_src(url: str, direct: bool = False) -> str:
 
     parsed = urlparse(url)
 
+    # Pagina servida por el propio quiosco: mismo origen que la display page,
+    # asi que va relativa y sin proxy de por medio.
+    if _is_panel_url(url):
+        return parsed.path + (f"?{parsed.query}" if parsed.query else "")
+
     # PRTG interno: usar /proxy/{path}
     if PRTG_HOST in parsed.netloc:
         path = parsed.path.lstrip("/")
@@ -511,6 +541,36 @@ def _iframe_src(url: str, direct: bool = False) -> str:
     if parsed.query:
         src += f"?{parsed.query}"
     return src
+
+
+@app.get("/api/uptime-panel")
+async def uptime_panel_data():
+    """Vista del panel en JSON. La consume el poll de la propia pagina."""
+    settings = uptime_panel.panel_settings(manager.config)
+    try:
+        return await panel_cache.get(settings, panel_client)
+    except Exception as exc:  # noqa: BLE001 - sin cache previa no hay nada que servir
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo leer el estado de servicios: {exc}",
+        )
+
+
+@app.get("/panel/uptime", response_class=HTMLResponse)
+async def uptime_panel_page():
+    """Panel de estado de servicios que se castea en vez de la status page.
+
+    Ver el docstring de uptime_panel.py para el porque de no enmarcar la pagina
+    de UptimeRobot directamente."""
+    settings = uptime_panel.panel_settings(manager.config)
+    try:
+        view = await panel_cache.get(settings, panel_client)
+    except Exception as exc:  # noqa: BLE001
+        # Nunca un 500 en una pantalla de recepcion: se explica en pantalla.
+        return HTMLResponse(uptime_panel.render_error_html(str(exc)), status_code=200)
+    return HTMLResponse(
+        uptime_panel.render_html(view, refresh_seconds=settings["refresh_seconds"])
+    )
 
 
 @app.get("/cast/display")
