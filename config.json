@@ -41,9 +41,10 @@
       "zoom": 1.0
     },
     {
-      "url": "https://stats.uptimerobot.com/26r4CjSckG",
-      "label": "Uptime Robot",
-      "zoom": 0.6
+      "id": "5cc23bf3",
+      "url": "http://172.25.21.37:8000/panel/uptime",
+      "label": "Estado de servicios",
+      "zoom": 1.0
     },
     {
       "url": "https://www.cgiar.org/",
@@ -67,5 +68,19 @@
   "screenshot_gif_duration_seconds": 8,
   "live_screenshot_interval_seconds": 2,
   "auto_start_rotation": true,
-  "proxy_auto_subnet": "172.25."
+  "proxy_auto_subnet": "172.25.",
+  "uptime_panel": {
+    "source_url": "https://stats.uptimerobot.com/api/getMonitorList/26r4CjSckG",
+    "refresh_seconds": 60,
+    "aliases": {
+      "Genebank web for request germplasm": "Solicitud de germoplasma",
+      "Genebank website": "Banco de germoplasma",
+      "KM Hub/cipweb2": "KM Hub",
+      "New CIPGADC - Distribution": "CIPGADC – Distribución",
+      "New OCS on Unit 4 Cloud": "OCS"
+    },
+    "hidden": [
+      "cipotato.org deface"
+    ]
+  }
 }

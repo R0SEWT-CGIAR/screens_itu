@@ -494,11 +494,49 @@ Escalar al equipo de desarrollo cuando:
 | Tipo de URL | Deteccion | Modo de render | Ruta efectiva |
 | --- | --- | --- | --- |
 | Interna PRTG | Host `172.25.0.22` | `iframe` | `/proxy/{path}` |
+| Panel propio | Ruta `/panel/...` | `iframe` | la misma ruta, relativa |
 | Externa proxyable | URL fuera de PRTG y fuera de lista screenshot | `iframe` | `/p/{origin_encoded}/{path}` |
 | Externa no proxyable | Host en `SCREENSHOT_SITES` | `img` con GIF | `/static/screenshots/{asset}.gif` |
 | App moderna/canvas | `links[].render_mode = live_screenshot` | `img` con PNG renovado | `/static/screenshots/{asset}.png` |
 
 La lista `SCREENSHOT_SITES` vive en `src/quiosco/main.py`. El modo se elige por link desde la consola (`Como se muestra`) o a mano en `config.json`. En modo `live_screenshot`, Chromium conserva la pagina y su WebSocket abiertos; cada captura se publica de forma atomica y la display page la solicita con una revision nueva en su poll de 2s. Alta o baja de este modo requiere reiniciar la app.
+
+### Panel de estado de servicios
+
+`GET /panel/uptime` es una pagina que sirve el propio quiosco con los datos de
+UptimeRobot. Reemplaza a la status page publica, que no se deja enmarcar y por
+eso llegaba a la pantalla como un GIF de su tope: 2 de 8 monitores visibles y el
+hero ocupando ~40% del alto.
+
+Los datos salen del endpoint JSON publico de la status page, **sin API key**:
+
+```text
+https://stats.uptimerobot.com/api/getMonitorList/<id-de-la-status-page>
+```
+
+Se configura en el bloque `uptime_panel` de `config.json`:
+
+| Clave | Para que |
+| --- | --- |
+| `source_url` | Endpoint JSON de la status page |
+| `refresh_seconds` | Ventana de cache y periodo del poll de la pagina (piso 15s) |
+| `aliases` | Nombre en UptimeRobot -> texto en pantalla |
+| `hidden` | Monitores que no salen en el panel, por nombre o por `monitorId` |
+
+`aliases` y `hidden` existen porque la pantalla de la entrada la ve cualquier
+visitante y los nombres crudos de UptimeRobot son nomenclatura interna de
+infraestructura. Ocultar un monitor solo lo saca de la grilla: su ultimo
+incidente sigue contando para la linea del encabezado.
+
+Una sola lectura upstream por ventana de refresco, compartida entre las tres
+pantallas y los espejos de la consola. Si UptimeRobot no responde, se sirve la
+ultima vista buena y, pasada una ventana doble, la pagina lo avisa en la
+esquina; nunca queda en blanco.
+
+El link en `config.json` se guarda con URL absoluta sobre `PROXY_BASE`
+(`http://<host>:8000/panel/uptime`) porque el loop de GIF necesita navegar a
+algo real, pero el iframe se sirve relativo. Si cambia la IP del servidor hay
+que actualizar tambien esa URL.
 
 ### Flujo de casting
 
