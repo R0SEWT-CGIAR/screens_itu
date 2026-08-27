@@ -27,9 +27,10 @@ import html
 import json
 import logging
 import math
+import re
 import time
-from datetime import datetime
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import httpx
 
@@ -128,6 +129,32 @@ def _relative_days(then: datetime, now: datetime) -> str:
     return f"hace {days} días"
 
 
+_OFFSET_RE = re.compile(r"^([+-])(\d{2}):?(\d{2})$")
+
+
+def local_now(raw: dict) -> datetime:
+    """'Ahora' en la zona horaria de la status page, como datetime naive.
+
+    El contenedor corre en UTC, asi que datetime.now() daba las 16:00 cuando en
+    Lima eran las 11:00. Y no es solo la etiqueta: las fechas de lastDowntime
+    vienen en la zona de la status page, de modo que restarles un ahora en UTC
+    corre el "hace N dias" en el borde del dia. El propio JSON declara su zona
+    en psp.timezone (p. ej. "-05:00"), asi que se usa esa y el panel queda bien
+    sin depender de como este configurado el contenedor.
+    """
+    offset = str((raw.get("psp") or {}).get("timezone") or "")
+    match = _OFFSET_RE.match(offset.strip())
+    if not match:
+        return datetime.now()
+    sign, hours, minutes = match.groups()
+    delta = timedelta(hours=int(hours), minutes=int(minutes))
+    if sign == "-":
+        delta = -delta
+    # Se devuelve naive para poder compararlo con las fechas de lastDowntime,
+    # que vienen sin zona y ya expresadas en esta misma.
+    return datetime.now(timezone.utc).astimezone(timezone(delta)).replace(tzinfo=None)
+
+
 def _is_hidden(monitor: dict, hidden: list[str]) -> bool:
     if not hidden:
         return False
@@ -146,7 +173,7 @@ def build_view(
     """Modelo de vista del panel a partir del JSON crudo de la status page."""
     aliases = aliases or {}
     hidden = hidden or []
-    now = now or datetime.now()
+    now = now or local_now(raw)
 
     monitors_raw = raw.get("data")
     if not isinstance(monitors_raw, list):

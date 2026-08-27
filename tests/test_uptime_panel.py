@@ -1,7 +1,7 @@
 """Tests del panel propio de estado de servicios (quiosco-pki)."""
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from quiosco import main, uptime_panel
 
@@ -164,6 +164,37 @@ class BuildViewTest(unittest.TestCase):
                          "dailyRatios": [{"date": "2026-06-01", "ratio": "98.000"}]}]}
         view = uptime_panel.build_view(raw)
         self.assertEqual(view["monitors"][0]["ratio_text"], "98.00")
+
+
+class TimezoneTest(unittest.TestCase):
+    """El contenedor corre en UTC; la status page declara su zona en el JSON."""
+
+    def test_usa_el_offset_de_la_status_page(self):
+        raw = {"psp": {"timezone": "-05:00"}, "data": []}
+        ahora_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        delta = ahora_utc - uptime_panel.local_now(raw)
+        self.assertAlmostEqual(delta.total_seconds(), 5 * 3600, delta=5)
+
+    def test_offset_positivo(self):
+        raw = {"psp": {"timezone": "+02:00"}, "data": []}
+        ahora_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        delta = uptime_panel.local_now(raw) - ahora_utc
+        self.assertAlmostEqual(delta.total_seconds(), 2 * 3600, delta=5)
+
+    def test_sin_zona_cae_al_reloj_local(self):
+        delta = abs((uptime_panel.local_now({"data": []}) - datetime.now()).total_seconds())
+        self.assertLess(delta, 5)
+
+    def test_zona_ilegible_no_revienta(self):
+        for basura in ("", "America/Lima", "-5", None, 12345):
+            with self.subTest(basura=basura):
+                raw = {"psp": {"timezone": basura}, "data": []}
+                self.assertIsInstance(uptime_panel.local_now(raw), datetime)
+
+    def test_el_reloj_del_panel_sale_en_hora_de_la_status_page(self):
+        raw = {"psp": {"timezone": "-05:00"}, "data": []}
+        esperado = uptime_panel.local_now(raw).strftime("%H:%M")
+        self.assertEqual(uptime_panel.build_view(raw)["clock"], esperado)
 
 
 class SettingsTest(unittest.TestCase):
