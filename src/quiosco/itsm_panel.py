@@ -281,8 +281,10 @@ def build_view(
         raise ValueError("El agregado del ITSM no trae una lista 'at_risk'")
 
     filas = []
+    sin_fecha = 0
     for t in crudas:
         if not isinstance(t, dict):
+            sin_fecha += 1
             continue
 
         relojes = {}
@@ -293,6 +295,7 @@ def build_view(
 
         # Sin ningun deadline conocido no hay nada contra que contar.
         if not relojes:
+            sin_fecha += 1
             continue
         # Un ticket con CUALQUIER deadline ya vencido sale de la lista: el panel
         # es de los que todavia se pueden salvar, y los vencidos van en los
@@ -329,6 +332,18 @@ def build_view(
             "unassigned": not pid,
         })
 
+    # Que el agregado traiga filas y NINGUNA tenga fecha legible no es un estado
+    # de negocio, es un desajuste de contrato — y se disfraza del estado mas
+    # tranquilizador que existe: "nada por brechearse". Paso de verdad cuando el
+    # flow empezo a mandar due_ttf/due_ttr y el panel todavia leia due.
+    contrato_roto = bool(crudas) and sin_fecha == len(crudas)
+    if contrato_roto:
+        logger.error(
+            "Panel ITSM: el agregado trae %d filas y ninguna con fecha legible. "
+            "Probable desajuste de contrato con el flow; el panel NO va a decir "
+            "que no hay nada en riesgo.", len(crudas),
+        )
+
     filas.sort(key=lambda f: f["hours"])
     mostradas, omitidas = filas[:max_rows], max(0, len(filas) - max_rows)
 
@@ -341,7 +356,9 @@ def build_view(
 
     n = len(filas)
     urgentes = sum(1 for f in filas if f["hours"] < 1)
-    if urgentes:
+    if contrato_roto:
+        severity = "leve"
+    elif urgentes:
         severity = "caida"
     elif n:
         severity = "leve"
@@ -358,15 +375,18 @@ def build_view(
                        f"{semana:%H:%M}"),
         "severity": severity,
         "problem": severity != "ok",
+        "broken_contract": contrato_roto,
         "headline": (
-            f"{n} por brechearse" if n else "Nada por brechearse"
+            "Datos ilegibles" if contrato_roto
+            else (f"{n} por brechearse" if n else "Nada por brechearse")
         ),
-        "subline": " · ".join(filter(None, [
+        "subline": ("el agregado no trae fechas que el panel entienda"
+                    if contrato_roto else " · ".join(filter(None, [
             f"el más urgente en {remaining_text(mostradas[0]['hours'])}" if mostradas
             else "todos con holgura",
             (lambda n: f"{n} sin asignar" if n else "")(
                 sum(1 for f in mostradas if f["unassigned"])),
-        ])),
+        ]))),
         "rows": mostradas,
         "omitted": omitidas,
         "counts": {

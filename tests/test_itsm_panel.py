@@ -501,5 +501,44 @@ class AsuntoYSolicitanteTest(unittest.TestCase):
             _payload([_ticket(1, horas=2), _ticket(2, horas=3, aid=None)]), now=AHORA)
         self.assertIn("1 sin asignar", v["subline"])
 
+
+class ContratoRotoTest(unittest.TestCase):
+    """Un desajuste de contrato con el flow NO puede leerse como calma.
+
+    Paso de verdad: el flow empezo a mandar due_ttf/due_ttr, el panel todavia
+    leia due, y la pantalla afirmo "Nada por brechearse" habiendo cinco.
+    """
+
+    def _viejo(self, tid):
+        return {"id": tid, "kind": "TTR", "due": _iso(2), "priority": 5,
+                "assignee": {"id": 19, "name": "Rodriguez, Saul"}}
+
+    def test_filas_sin_fecha_legible_no_se_leen_como_calma(self):
+        v = itsm_panel.build_view(_payload([self._viejo(1), self._viejo(2)]), now=AHORA)
+        self.assertTrue(v["broken_contract"])
+        self.assertEqual(v["headline"], "Datos ilegibles")
+        self.assertNotIn("Nada por brechearse", v["headline"])
+        self.assertNotEqual(v["severity"], "ok")
+
+    def test_lista_legitimamente_vacia_si_es_calma(self):
+        # Sin filas en el agregado, "nada por brechearse" es la verdad.
+        v = itsm_panel.build_view(_payload([]), now=AHORA)
+        self.assertFalse(v["broken_contract"])
+        self.assertEqual(v["headline"], "Nada por brechearse")
+        self.assertEqual(v["severity"], "ok")
+
+    def test_filas_descartadas_por_negocio_no_son_contrato_roto(self):
+        # Todas vencidas o fuera del horizonte: eso SI es un estado de negocio.
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, horas=-5), _ticket(2, horas=900)]), now=AHORA)
+        self.assertFalse(v["broken_contract"])
+        self.assertEqual(v["headline"], "Nada por brechearse")
+
+    def test_una_sola_fila_ilegible_entre_buenas_no_dispara(self):
+        v = itsm_panel.build_view(
+            _payload([self._viejo(1), _ticket(2, horas=2)]), now=AHORA)
+        self.assertFalse(v["broken_contract"])
+        self.assertEqual(len(v["rows"]), 1)
+
 if __name__ == "__main__":
     unittest.main()
