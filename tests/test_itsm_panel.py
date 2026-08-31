@@ -5,6 +5,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+import httpx
+
 from quiosco import itsm_panel
 
 AHORA = datetime(2026, 8, 28, 16, 0, 0, tzinfo=timezone.utc)
@@ -184,6 +186,76 @@ class RenderTest(unittest.TestCase):
         v = itsm_panel.build_view(_payload([_ticket(1, nombre="</script><b>x")]), now=AHORA)
         self.assertNotIn("</script><b>", itsm_panel.render_html(v, poll_seconds=60))
 
+
+
+class TransportTest(unittest.IsolatedAsyncioTestCase):
+    """El trigger del flow es GET. Postear devuelve 4xx y el panel lo mostraria
+    como 'fuente caida', que es un sintoma que despista."""
+
+    async def _pedir(self, payload=None):
+        visto = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            visto["method"] = request.method
+            visto["url"] = str(request.url)
+            return httpx.Response(200, json=payload if payload is not None else _payload([]))
+
+        cache = itsm_panel.PanelCache(ttl_seconds=300)
+        settings = {"flow_url": "https://flow.example/run?sig=xxx",
+                    "refresh_seconds": 300, "poll_seconds": 60,
+                    "horizon_hours": 168, "max_rows": 8, "show_people": True}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            view = await cache.get(settings, c)
+        return visto, view, cache
+
+    async def test_usa_get(self):
+        visto, _, _ = await self._pedir()
+        self.assertEqual(visto["method"], "GET")
+
+    async def test_segunda_lectura_sale_de_cache_sin_repegarle_al_flow(self):
+        llamadas = {"n": 0}
+
+        def handler(request):
+            llamadas["n"] += 1
+            return httpx.Response(200, json=_payload([]))
+
+        cache = itsm_panel.PanelCache(ttl_seconds=300)
+        settings = {"flow_url": "https://flow.example/run", "refresh_seconds": 300,
+                    "poll_seconds": 60, "horizon_hours": 168, "max_rows": 8,
+                    "show_people": True}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            await cache.get(settings, c)
+            await cache.get(settings, c)
+        self.assertEqual(llamadas["n"], 1)
+
+    async def test_un_agregado_malformado_no_desplaza_al_ultimo_bueno(self):
+        # El due se calcula contra el reloj REAL, no contra la referencia fija de
+        # los otros tests: la cache mide la cuenta regresiva contra ahora, que es
+        # justamente lo que la hace exacta entre refrescos del flow.
+        futuro = (datetime.now(timezone.utc) + timedelta(hours=2)
+                  ).isoformat().replace("+00:00", "Z")
+        bueno = _payload([dict(_ticket(1), due=futuro)])
+        respuestas = [bueno, {"basura": True}]
+
+        def handler(request):
+            return httpx.Response(200, json=respuestas.pop(0) if respuestas else {})
+
+        cache = itsm_panel.PanelCache(ttl_seconds=0)   # siempre refresca
+        settings = {"flow_url": "https://flow.example/run", "refresh_seconds": 0,
+                    "poll_seconds": 60, "horizon_hours": 168, "max_rows": 8,
+                    "show_people": True}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            await cache.get(settings, c)
+            view = await cache.get(settings, c)      # llega basura
+        self.assertEqual([r["id"] for r in view["rows"]], [1])
+
+    async def test_sin_url_configurada_no_inventa_una_vista(self):
+        cache = itsm_panel.PanelCache()
+        settings = {"flow_url": "", "refresh_seconds": 300, "poll_seconds": 60,
+                    "horizon_hours": 168, "max_rows": 8, "show_people": True}
+        async with httpx.AsyncClient() as c:
+            with self.assertRaises(RuntimeError):
+                await cache.get(settings, c)
 
 if __name__ == "__main__":
     unittest.main()

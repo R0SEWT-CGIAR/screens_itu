@@ -274,9 +274,12 @@ class PanelCache:
                         raise RuntimeError(
                             "Falta ITSM_PANEL_FLOW_URL en el entorno del contenedor"
                         )
-                    r = await client.post(
-                        settings["flow_url"], json={},
-                        timeout=DEFAULT_TIMEOUT_SECONDS,
+                    # GET, no POST: el trigger del flow es de lectura. Lo fija
+                    # un test porque cambiarlo por analogia con otros flows del
+                    # environment (CreateQaTicketFromApi si es POST) rompe en
+                    # silencio con un 4xx que se veria como "fuente caida".
+                    r = await client.get(
+                        settings["flow_url"], timeout=DEFAULT_TIMEOUT_SECONDS
                     )
                     r.raise_for_status()
                     payload = r.json()
