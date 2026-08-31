@@ -503,7 +503,7 @@ _STYLE = """
   .hero.leve .hero-icono { color:var(--leve); }
 
   table { flex:0 1 auto; }
-  td { padding:10px 8px; }
+  td { padding:8px 8px; }
   .fila { border-top:1px solid var(--linea); }
   .fila.caida { background:#2a1618; }
   .fila.caida td:first-child { box-shadow:inset 4px 0 0 var(--caida); }
@@ -540,11 +540,24 @@ _STYLE = """
   .cx { flex:1; background:var(--superficie); border-radius:9px; padding:9px 14px;
         border-top:3px solid var(--neutro); }
   .cx.mal { border-top-color:var(--caida); }
+  .cx.cero { border-top-color:var(--neutro); }
   .cx-n { font-size:25px; font-weight:650; letter-spacing:-.02em; }
   .cx.cero .cx-n { color:var(--tinta-3); }
   .cx-t { font-size:13px; color:var(--tinta-3); margin-top:1px; }
   .mas { font-size:14px; color:var(--tinta-3); padding:8px 0 0 14px; }
-  .limpio { margin:auto; text-align:center; color:var(--tinta-3); font-size:19px; padding:30px 0; }
+  .limpio { text-align:center; color:var(--ok); font-size:23px; font-weight:550; padding:26px 0 6px; }
+  .limpio small { display:block; font-size:15px; color:var(--tinta-3); font-weight:400; margin-top:5px; }
+  /* Con la lista vacia el espacio sobrante se lo quedan los contadores, que
+     pasan a ser el contenido en vez de un pie de pagina. */
+  /* Pegados al mensaje, no al fondo: un hueco EN MEDIO parece que algo no
+     cargo; el mismo hueco ABAJO se lee como que sobra sitio. */
+  body.sin-riesgo .contexto { gap:14px; margin-top:20px; }
+  /* En el resto de estados es .contexto quien empuja hacia abajo; sin riesgo
+     hay que anclar el pie a mano o se sube con el contenido. */
+  body.sin-riesgo footer { margin-top:auto; }
+  body.sin-riesgo .cx { padding:22px 20px; }
+  body.sin-riesgo .cx-n { font-size:44px; }
+  body.sin-riesgo .cx-t { font-size:15px; margin-top:3px; }
 """
 
 _SCRIPT = """
@@ -571,8 +584,10 @@ function pintar(v) {
   document.getElementById('hero-sub').textContent = v.subline;
 
   const cuerpo = document.getElementById('filas');
+  document.body.classList.toggle('sin-riesgo', !v.rows.length && !v.broken_contract);
   if (!v.rows.length) {
-    cuerpo.innerHTML = `<tr><td class="limpio">Ningún ticket a punto de brechear</td></tr>`;
+    cuerpo.innerHTML = `<tr><td class="limpio">Ningún ticket a punto de brechear
+      <small>lo que sigue es el estado de la cola</small></td></tr>`;
   } else {
     cuerpo.innerHTML = v.rows.map(r => {
       let quien = `<span class="av sin">\\u2014</span><span class="nom sin">sin asignar</span>`;
