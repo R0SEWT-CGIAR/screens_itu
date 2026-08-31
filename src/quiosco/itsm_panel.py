@@ -53,7 +53,9 @@ DEFAULT_TIMEOUT_SECONDS = 30
 # tope solo evita que un flow con un bug ponga en pantalla algo de dentro de un
 # mes; si recortara antes que el flow, estaria escondiendo lo que el flow eligio.
 DEFAULT_HORIZON_HOURS = 168
-DEFAULT_MAX_ROWS = 8
+DEFAULT_MAX_ROWS = 6
+# Title es Text(255) en SharePoint y el ancho util son ~44 caracteres a 22px.
+MAX_SUBJECT = 44
 # Corte de la semana: miercoles 07:30 Lima, que es cuando el equipo se reune a
 # revisar estas metricas. Vive aqui y no en el flow a proposito: no es un hecho
 # de los datos como el calendario habil, es cuando se junta la gente. Moverlo
@@ -133,6 +135,13 @@ def remaining_text(hours: float) -> str:
     if hours < 48:
         return f"{hours:.0f} h"
     return f"{hours / 24:.0f} d"
+
+
+def _reloj(hours):
+    """Un reloj de la fila, o None si ese deadline no aplica."""
+    if hours is None:
+        return None
+    return {"remaining": remaining_text(hours), "band": band_for(hours)}
 
 
 def band_for(hours: float) -> str:
@@ -246,8 +255,16 @@ def build_view(
           # El flow todavia emite "week_start", pero se IGNORA: lo calcula
           # week_start() desde la config de este lado.
           # assignee NO trae foto: esas viven en disco (ver PHOTO_DIR).
-          "at_risk": [ {"id": 65036, "kind": "TTR",
-                        "due": "2026-08-28T16:15:00Z", "priority": 5,
+          "at_risk": [ {"id": 65036, "priority": 5,
+                        "subject": "...", "requester": "...",
+                        "due_ttf": "2026-08-28T16:15:00Z",
+                        # due_ttr null significa dos cosas distintas y por eso
+                        # viene acompañado: con ttr_responded true ya respondio
+                        # un tecnico (se pinta —), con false no hay deadline
+                        # conocido (se pinta ? en tinta de aviso). Pintar lo
+                        # mismo para ambos escondia un fallo detras de un estado
+                        # normal.
+                        "due_ttr": None, "ttr_responded": True,
                         "assignee": {"id": 6728, "name": "..."}} ],
           "counts": {"breached_ttf": 35, "breached_ttr": 30,
                      "untriaged": 26, "waiting_user": 64, "active": 69}
@@ -267,25 +284,45 @@ def build_view(
     for t in crudas:
         if not isinstance(t, dict):
             continue
-        vence = _parse(t.get("due"))
-        if vence is None:
+
+        relojes = {}
+        for clave, campo in (("ttf", "due_ttf"), ("ttr", "due_ttr")):
+            vence = _parse(t.get(campo))
+            if vence is not None:
+                relojes[clave] = (vence - now).total_seconds() / 3600
+
+        # Sin ningun deadline conocido no hay nada contra que contar.
+        if not relojes:
             continue
-        horas = (vence - now).total_seconds() / 3600
-        # Lo ya vencido no se lista: el panel es de los que todavia se pueden
-        # salvar. Los vencidos van en los contadores del equipo.
-        if horas < 0 or horas > horizon_hours:  # el tope es red de seguridad
+        # Un ticket con CUALQUIER deadline ya vencido sale de la lista: el panel
+        # es de los que todavia se pueden salvar, y los vencidos van en los
+        # contadores del equipo, sin desglose por persona.
+        if any(h < 0 for h in relojes.values()):
+            continue
+        proximo = min(relojes.values())
+        if proximo > horizon_hours:      # el tope es red de seguridad, no criterio
             continue
 
         quien = t.get("assignee") or {}
         nombre = display_name(quien.get("name"))
         pid = str(quien.get("id") or "")
+        asunto = " ".join(str(t.get("subject") or "").split())
+        if len(asunto) > MAX_SUBJECT:
+            asunto = asunto[:MAX_SUBJECT - 1].rstrip() + "…"
+
         filas.append({
             "id": t.get("id"),
-            "kind": str(t.get("kind") or "").upper()[:3],
-            "hours": horas,
-            "remaining": remaining_text(horas),
-            "band": band_for(horas),
+            "hours": proximo,
+            "band": band_for(proximo),
             "priority": t.get("priority"),
+            "subject": asunto,
+            "requester": display_name(t.get("requester")),
+            "ttf": _reloj(relojes.get("ttf")),
+            "ttr": _reloj(relojes.get("ttr")),
+            # Sin due_ttr, el motivo importa: respondido es normal, sin deadline
+            # es una rareza que tiene que verse como tal.
+            "ttr_state": ("" if "ttr" in relojes
+                          else ("respondido" if t.get("ttr_responded") else "desconocido")),
             "name": nombre if show_people else "",
             "initials": initials(nombre) if (show_people and nombre) else "",
             "photo": PHOTO_URL.format(pid) if (show_people and pid in photo_ids) else "",
@@ -324,10 +361,12 @@ def build_view(
         "headline": (
             f"{n} por brechearse" if n else "Nada por brechearse"
         ),
-        "subline": (
-            f"el más urgente en {mostradas[0]['remaining']}" if mostradas
-            else "todos con holgura"
-        ),
+        "subline": " · ".join(filter(None, [
+            f"el más urgente en {remaining_text(mostradas[0]['hours'])}" if mostradas
+            else "todos con holgura",
+            (lambda n: f"{n} sin asignar" if n else "")(
+                sum(1 for f in mostradas if f["unassigned"])),
+        ])),
         "rows": mostradas,
         "omitted": omitidas,
         "counts": {
@@ -422,27 +461,50 @@ class PanelCache:
 # --- Render ---
 
 _STYLE = """
-  /* Sin flex:1. En una ventana mas alta que los 720p del Chromecast la tabla
-     estiraba y dejaba huecos enormes entre filas; con esto las filas conservan
-     su alto y el espacio sobrante se va abajo, donde no molesta. */
+  :root {
+    /* Paleta del reporte ITSM360, que es el que el equipo ya mira cada semana.
+       Ademas de ser la que pidieron, separa mejor: teal contra salmon mide
+       dE 11.6 en deuteranopia, contra los 4.1 del verde/rojo. Casi 3x. */
+    --ok:#01b8aa; --caida:#fd625e; --leve:#f2c80f; --neutro:#5a5a56;
+  }
+  .hero { border-left-color:var(--ok); }
+  .hero.leve { border-left-color:var(--leve); background:#221f10; }
+  .hero.leve .hero-icono { color:var(--leve); }
+
   table { flex:0 1 auto; }
-  .cuenta { width:210px; padding-left:14px; }
-  .cuenta .t { font-size:33px; font-weight:650; letter-spacing:-.02em; color:var(--tinta-3); }
-  .fila.caida .cuenta .t { color:var(--caida); }
-  .fila.leve  .cuenta .t { color:var(--leve); }
-  .tk { font-size:29px; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
-  .tipo { font-size:14px; font-weight:650; margin-left:12px; padding:2px 7px;
-          border-radius:4px; vertical-align:middle; letter-spacing:.03em; }
-  .tipo.ttr { background:#2d2416; color:var(--leve); }
-  .tipo.ttf { background:#2a1a18; color:var(--grave); }
-  .pri { font-size:14px; color:var(--tinta-3); margin-left:8px; font-weight:400;
-         border:1px solid var(--linea); border-radius:4px; padding:1px 6px; vertical-align:middle; }
-  .quien { text-align:right; padding-right:2px; white-space:nowrap; }
-  .av { display:inline-flex; align-items:center; justify-content:center; width:38px; height:38px;
-        border-radius:50%; font-size:15px; font-weight:650; color:#fff; vertical-align:middle;
-        background:#3a3a37; object-fit:cover; }
+  td { padding:10px 8px; }
+  .fila { border-top:1px solid var(--linea); }
+  .fila.caida { background:#2a1618; }
+  .fila.caida td:first-child { box-shadow:inset 4px 0 0 var(--caida); }
+
+  .relojes { width:196px; padding-left:14px; white-space:nowrap; }
+  .chip { display:inline-block; font-size:19px; font-weight:650; padding:4px 9px;
+          border-radius:6px; background:#232320; color:var(--tinta-2);
+          font-variant-numeric:tabular-nums; margin-right:7px; }
+  .chip b { font-size:11px; font-weight:700; color:var(--tinta-3); display:block;
+            letter-spacing:.08em; margin-bottom:-1px; }
+  .chip.caida { background:#3d1c1e; color:var(--caida); }
+  .chip.caida b { color:var(--caida); opacity:.75; }
+  .chip.leve { background:#332d12; color:var(--leve); }
+  .chip.leve b { color:var(--leve); opacity:.75; }
+  .chip.nula { color:var(--tinta-3); }
+  /* Sin deadline conocido no es lo mismo que ya respondido: se pinta en tinta
+     de aviso para que se lea como rareza y no como estado normal. */
+  .chip.raro { color:var(--leve); }
+
+  .tk { font-size:16px; font-weight:600; color:var(--tinta-3);
+        font-variant-numeric:tabular-nums; margin-right:11px; }
+  .asunto { font-size:22px; font-weight:550; letter-spacing:-.01em; }
+  .sol { display:block; font-size:14px; color:var(--tinta-3); margin-top:3px; }
+
+  .quien { width:250px; text-align:right; white-space:nowrap; }
+  .av { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px;
+        border-radius:50%; font-size:14px; font-weight:650; color:#fff;
+        background:#3a3a37; vertical-align:middle; object-fit:cover; }
   .av.sin { background:transparent; border:2px dashed var(--linea); color:var(--tinta-3); }
-  .nom { font-size:16px; color:var(--tinta-2); margin-left:11px; vertical-align:middle; }
+  .nom { font-size:17px; color:var(--tinta-2); margin-left:11px; vertical-align:middle; }
+  .nom.sin { color:var(--tinta-3); }
+
   .contexto { display:flex; gap:11px; margin-top:auto; padding-top:11px; }
   .cx { flex:1; background:var(--superficie); border-radius:9px; padding:9px 14px;
         border-top:3px solid var(--neutro); }
@@ -455,6 +517,16 @@ _STYLE = """
 """
 
 _SCRIPT = """
+function chip(tipo, reloj, estado) {
+  if (reloj) {
+    return `<span class="chip ${reloj.band}"><b>${tipo}</b>${escapar(reloj.remaining)}</span>`;
+  }
+  // "—" es ya respondido; "?" es no sabemos. Pintar lo mismo para ambos
+  // escondia un fallo detras de un estado normal.
+  const raro = estado === 'desconocido';
+  return `<span class="chip ${raro ? 'raro' : 'nula'}"><b>${tipo}</b>${raro ? '?' : '\\u2014'}</span>`;
+}
+
 function pintar(v) {
   document.getElementById('reloj').innerHTML =
     (v.stale ? `<span class="stale">datos de hace ${Math.round(v.age_seconds/60)} min</span>`
@@ -472,22 +544,18 @@ function pintar(v) {
     cuerpo.innerHTML = `<tr><td class="limpio">Ningún ticket a punto de brechear</td></tr>`;
   } else {
     cuerpo.innerHTML = v.rows.map(r => {
-      let quien = '';
-      if (r.unassigned) {
-        quien = `<td class="quien"><span class="av sin">—</span><span class="nom">sin asignar</span></td>`;
-      } else if (r.name) {
-        // La foto puede faltar (el conector da 404 para quien no la tiene): las
-        // iniciales no son decoracion, son el camino normal para varios.
-        const av = r.photo
-          ? `<img class="av" src="${r.photo}" alt="">`
-          : `<span class="av">${escapar(r.initials)}</span>`;
-        quien = `<td class="quien">${av}<span class="nom">${escapar(r.name)}</span></td>`;
+      let quien = `<span class="av sin">\\u2014</span><span class="nom sin">sin asignar</span>`;
+      if (!r.unassigned && r.name) {
+        const av = r.photo ? `<img class="av" src="${r.photo}" alt="">`
+                           : `<span class="av">${escapar(r.initials)}</span>`;
+        quien = `${av}<span class="nom">${escapar(r.name)}</span>`;
       }
+      const sol = r.requester ? `<span class="sol">solicita ${escapar(r.requester)}</span>` : '';
       return `<tr class="fila ${r.band}">
-        <td class="cuenta"><span class="t">${escapar(r.remaining)}</span></td>
-        <td class="tk">#${escapar(String(r.id))}<span class="tipo ${r.kind.toLowerCase()}">${escapar(r.kind)}</span>
-            <span class="pri">P${escapar(String(r.priority))}</span></td>
-        ${quien}
+        <td class="relojes">${chip('TTF', r.ttf, '')}${chip('TTR', r.ttr, r.ttr_state)}</td>
+        <td class="que"><span class="tk">#${escapar(String(r.id))}</span>
+            <span class="asunto">${escapar(r.subject)}</span>${sol}</td>
+        <td class="quien">${quien}</td>
       </tr>`;
     }).join('');
   }
@@ -496,8 +564,8 @@ function pintar(v) {
     v.omitted ? `y ${v.omitted} más que no caben en pantalla` : '';
 
   const C = [
-    ['mal', v.counts.breached_ttf, 'ya vencidos en TTF'],
-    ['mal', v.counts.breached_ttr, 'ya vencidos en TTR'],
+    ['mal', v.counts.breached_ttf, 'vencidos en TTF'],
+    ['mal', v.counts.breached_ttr, 'vencidos en TTR'],
     ['',    v.counts.untriaged,    'sin triar'],
     ['',    v.counts.waiting_user, 'esperando al usuario'],
   ];

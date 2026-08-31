@@ -14,13 +14,25 @@ from quiosco import itsm_panel
 AHORA = datetime(2026, 8, 28, 16, 0, 0, tzinfo=timezone.utc)
 
 
-def _ticket(tid, *, kind="TTR", horas=2.0, priority=5, nombre="Rodriguez, Saul", aid=19,
-            photo=""):
-    quien = {"id": aid, "name": nombre, "photo": photo} if aid else {}
+def _iso(horas):
+    return (AHORA + timedelta(hours=horas)).isoformat().replace("+00:00", "Z")
+
+
+def _ticket(tid, *, horas=2.0, ttr=None, respondido=True, priority=5,
+            nombre="Rodriguez, Saul", aid=19, subject="Acceso a carpeta",
+            requester="Gonzales, Ana Paula"):
+    """Fila de at_risk con la forma del contrato: dos deadlines por separado.
+
+    `horas` es el TTF; `ttr` en None significa que ese reloj no aplica, y
+    `respondido` distingue los dos motivos (ya contesto un tecnico / no hay
+    deadline conocido), que el panel pinta distinto a proposito.
+    """
     return {
-        "id": tid, "kind": kind, "priority": priority,
-        "due": (AHORA + timedelta(hours=horas)).isoformat().replace("+00:00", "Z"),
-        "assignee": quien,
+        "id": tid, "priority": priority, "subject": subject, "requester": requester,
+        "due_ttf": _iso(horas) if horas is not None else None,
+        "due_ttr": _iso(ttr) if ttr is not None else None,
+        "ttr_responded": respondido,
+        "assignee": {"id": aid, "name": nombre} if aid else {},
     }
 
 
@@ -74,7 +86,7 @@ class BuildViewTest(unittest.TestCase):
             _payload([_ticket(3, horas=5), _ticket(1, horas=0.5), _ticket(2, horas=2)]),
             now=AHORA)
         self.assertEqual([r["id"] for r in v["rows"]], [1, 2, 3])
-        self.assertEqual(v["subline"], "el más urgente en 30 min")
+        self.assertIn("el más urgente en 30 min", v["subline"])
 
     def test_los_ya_vencidos_no_se_listan(self):
         # El panel es de los que todavia se pueden salvar; los vencidos van en
@@ -164,13 +176,13 @@ class BuildViewTest(unittest.TestCase):
 
     def test_stamp_sin_zona_se_lee_como_utc(self):
         # SharePoint emite UTC en raw; tratarlo como hora local corre el reloj 5 h.
-        t = dict(_ticket(1, horas=2), due="2026-08-28T18:00:00")
+        t = dict(_ticket(1, horas=2), due_ttf="2026-08-28T18:00:00")
         v = itsm_panel.build_view(_payload([t]), now=AHORA)
-        self.assertEqual(v["rows"][0]["remaining"], "2 h")
+        self.assertEqual(v["rows"][0]["ttf"]["remaining"], "2 h")
 
     def test_due_invalido_se_descarta_sin_reventar(self):
         v = itsm_panel.build_view(
-            _payload([dict(_ticket(1), due="no-es-fecha"), _ticket(2, horas=1)]), now=AHORA)
+            _payload([dict(_ticket(1), due_ttf="no-es-fecha"), _ticket(2, horas=1)]), now=AHORA)
         self.assertEqual([r["id"] for r in v["rows"]], [2])
 
     def test_payload_sin_at_risk_es_error(self):
@@ -310,7 +322,7 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         # justamente lo que la hace exacta entre refrescos del flow.
         futuro = (datetime.now(timezone.utc) + timedelta(hours=2)
                   ).isoformat().replace("+00:00", "Z")
-        bueno = _payload([dict(_ticket(1), due=futuro)])
+        bueno = _payload([dict(_ticket(1), due_ttf=futuro)])
         respuestas = [bueno, {"basura": True}]
 
         def handler(request):
@@ -412,6 +424,82 @@ class AvailablePhotosTest(unittest.TestCase):
             with self.assertNoLogs("quiosco.itsm_panel", level="WARNING"):
                 itsm_panel.available_photos(pathlib.Path(d))
         itsm_panel._aviso_fotos = False
+
+
+class DosRelojesTest(unittest.TestCase):
+    """Cada fila lleva TTF y TTR por separado: un ticket puede estar a 36 min de
+    brechear el fix y tener la respuesta ya cumplida, y con un solo reloj eso se
+    perdia."""
+
+    def test_los_dos_relojes_se_muestran(self):
+        v = itsm_panel.build_view(_payload([_ticket(1, horas=3, ttr=1.1)]), now=AHORA)
+        r = v["rows"][0]
+        self.assertEqual(r["ttf"]["remaining"], "3 h")
+        self.assertEqual(r["ttr"]["remaining"], "1.1 h")
+
+    def test_respondido_y_desconocido_no_se_ven_igual(self):
+        # El bug que motiva ttr_responded: "—" significando a la vez "ya lo
+        # atendieron" y "no sabemos" es un fallo disfrazado de estado normal.
+        resp = itsm_panel.build_view(
+            _payload([_ticket(1, ttr=None, respondido=True)]), now=AHORA)
+        desc = itsm_panel.build_view(
+            _payload([_ticket(1, ttr=None, respondido=False)]), now=AHORA)
+        self.assertEqual(resp["rows"][0]["ttr_state"], "respondido")
+        self.assertEqual(desc["rows"][0]["ttr_state"], "desconocido")
+        self.assertIsNone(resp["rows"][0]["ttr"])
+
+    def test_con_deadline_vivo_no_hay_estado(self):
+        v = itsm_panel.build_view(_payload([_ticket(1, ttr=2)]), now=AHORA)
+        self.assertEqual(v["rows"][0]["ttr_state"], "")
+
+    def test_cualquiera_de_los_dos_vencido_saca_la_fila(self):
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, horas=5, ttr=-1), _ticket(2, horas=-1, ttr=5),
+                      _ticket(3, horas=5, ttr=2)]), now=AHORA)
+        self.assertEqual([r["id"] for r in v["rows"]], [3])
+
+    def test_sin_ningun_deadline_la_fila_no_existe(self):
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, horas=None, ttr=None, respondido=False)]), now=AHORA)
+        self.assertEqual(v["rows"], [])
+
+    def test_ordena_por_el_reloj_mas_proximo_de_los_dos(self):
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, horas=10, ttr=6), _ticket(2, horas=8, ttr=None),
+                      _ticket(3, horas=20, ttr=2)]), now=AHORA)
+        self.assertEqual([r["id"] for r in v["rows"]], [3, 1, 2])
+
+    def test_la_banda_de_la_fila_la_marca_el_mas_urgente(self):
+        v = itsm_panel.build_view(_payload([_ticket(1, horas=20, ttr=0.5)]), now=AHORA)
+        self.assertEqual(v["rows"][0]["band"], "caida")
+
+
+class AsuntoYSolicitanteTest(unittest.TestCase):
+    def test_el_asunto_se_trunca(self):
+        largo = "Habilitación de cuenta de correo para el nuevo consultor de Madagascar"
+        v = itsm_panel.build_view(_payload([_ticket(1, subject=largo)]), now=AHORA)
+        a = v["rows"][0]["subject"]
+        self.assertLessEqual(len(a), itsm_panel.MAX_SUBJECT)
+        self.assertTrue(a.endswith("…"))
+
+    def test_el_asunto_corto_no_se_toca(self):
+        v = itsm_panel.build_view(_payload([_ticket(1, subject="Town Hall")]), now=AHORA)
+        self.assertEqual(v["rows"][0]["subject"], "Town Hall")
+
+    def test_el_solicitante_se_normaliza_como_el_asignado(self):
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, requester="Gonzales, Ana Paula  (CIP)")]), now=AHORA)
+        self.assertEqual(v["rows"][0]["requester"], "Ana Paula Gonzales")
+
+    def test_sin_asunto_ni_solicitante_no_revienta(self):
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, subject=None, requester=None)]), now=AHORA)
+        self.assertEqual((v["rows"][0]["subject"], v["rows"][0]["requester"]), ("", ""))
+
+    def test_el_subtitulo_avisa_de_los_sin_asignar(self):
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, horas=2), _ticket(2, horas=3, aid=None)]), now=AHORA)
+        self.assertIn("1 sin asignar", v["subline"])
 
 if __name__ == "__main__":
     unittest.main()
