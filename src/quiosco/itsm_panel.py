@@ -380,7 +380,10 @@ class PanelCache:
 # --- Render ---
 
 _STYLE = """
-  table { flex:1; }
+  /* Sin flex:1. En una ventana mas alta que los 720p del Chromecast la tabla
+     estiraba y dejaba huecos enormes entre filas; con esto las filas conservan
+     su alto y el espacio sobrante se va abajo, donde no molesta. */
+  table { flex:0 1 auto; }
   .cuenta { width:210px; padding-left:14px; }
   .cuenta .t { font-size:33px; font-weight:650; letter-spacing:-.02em; color:var(--tinta-3); }
   .fila.caida .cuenta .t { color:var(--caida); }
@@ -398,7 +401,7 @@ _STYLE = """
         background:#3a3a37; object-fit:cover; }
   .av.sin { background:transparent; border:2px dashed var(--linea); color:var(--tinta-3); }
   .nom { font-size:16px; color:var(--tinta-2); margin-left:11px; vertical-align:middle; }
-  .contexto { display:flex; gap:11px; margin-top:11px; }
+  .contexto { display:flex; gap:11px; margin-top:auto; padding-top:11px; }
   .cx { flex:1; background:var(--superficie); border-radius:9px; padding:9px 14px;
         border-top:3px solid var(--neutro); }
   .cx.mal { border-top-color:var(--caida); }
