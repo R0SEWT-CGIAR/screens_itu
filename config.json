@@ -96,6 +96,8 @@
     "poll_seconds": 60,
     "horizon_hours": 168,
     "max_rows": 8,
-    "show_people": true
+    "show_people": true,
+    "week_weekday": 3,
+    "week_time": "07:30"
   }
 }

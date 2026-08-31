@@ -53,6 +53,13 @@ DEFAULT_TIMEOUT_SECONDS = 30
 # mes; si recortara antes que el flow, estaria escondiendo lo que el flow eligio.
 DEFAULT_HORIZON_HOURS = 168
 DEFAULT_MAX_ROWS = 8
+# Corte de la semana: miercoles 07:30 Lima, que es cuando el equipo se reune a
+# revisar estas metricas. Vive aqui y no en el flow a proposito: no es un hecho
+# de los datos como el calendario habil, es cuando se junta la gente. Moverlo
+# debe ser editar una linea de config, no un PATCH al clientdata de un flow en
+# produccion.
+DEFAULT_WEEK_WEEKDAY = 3           # ISO: 1=lunes ... 7=domingo
+DEFAULT_WEEK_TIME = "07:30"
 
 LIMA = timezone(timedelta(hours=-5))
 
@@ -82,6 +89,8 @@ def panel_settings(config: dict) -> dict:
         "horizon_hours": _num("horizon_hours", DEFAULT_HORIZON_HOURS, 1),
         "max_rows": int(_num("max_rows", DEFAULT_MAX_ROWS, 1)),
         "show_people": bool(raw.get("show_people", True)),
+        "week_weekday": int(_num("week_weekday", DEFAULT_WEEK_WEEKDAY, 1)),
+        "week_time": str(raw.get("week_time") or DEFAULT_WEEK_TIME),
     }
 
 
@@ -122,6 +131,28 @@ def band_for(hours: float) -> str:
     return "neutro"
 
 
+def week_start(now: datetime, weekday: int = DEFAULT_WEEK_WEEKDAY,
+               hhmm: str = DEFAULT_WEEK_TIME) -> datetime:
+    """Inicio de la semana EN CURSO: el ultimo corte <= ahora, en hora de Lima.
+
+    Nunca uno futuro: un "cumplimiento de la semana" necesita un inicio en el
+    pasado que contar. Si hoy es el dia del corte pero todavia no es la hora, la
+    semana en curso empezo hace siete dias.
+    """
+    local = now.astimezone(LIMA)
+    try:
+        hora, minuto = (int(x) for x in hhmm.split(":", 1))
+    except (ValueError, AttributeError):
+        hora, minuto = 7, 30
+    weekday = min(7, max(1, weekday))
+
+    corte = local.replace(hour=hora, minute=minuto, second=0, microsecond=0)
+    corte -= timedelta(days=(local.isoweekday() - weekday) % 7)
+    if corte > local:
+        corte -= timedelta(days=7)
+    return corte
+
+
 def initials(name: str) -> str:
     """Iniciales para quien no tiene foto: el conector devuelve 404 y sin esto
     la fila quedaria coja."""
@@ -140,6 +171,8 @@ def build_view(
     horizon_hours: float = DEFAULT_HORIZON_HOURS,
     max_rows: int = DEFAULT_MAX_ROWS,
     show_people: bool = True,
+    week_weekday: int = DEFAULT_WEEK_WEEKDAY,
+    week_time: str = DEFAULT_WEEK_TIME,
 ) -> dict:
     """Modelo de vista a partir del agregado que publica el flow.
 
@@ -147,10 +180,8 @@ def build_view(
 
         {
           "generated_at": "2026-08-31T16:11:00Z",
-          # Inicio de la semana EN CURSO: el ultimo miercoles 12:30Z (= 07:30
-          # Lima, el corte de la reunion) que sea <= ahora. Nunca uno futuro:
-          # un "% de la semana" necesita un inicio en el pasado que contar.
-          "week_start":   "2026-08-26T12:30:00Z",
+          # El flow todavia emite "week_start", pero se IGNORA: lo calcula
+          # week_start() desde la config de este lado.
           "at_risk": [ {"id": 65036, "kind": "TTR",
                         "due": "2026-08-28T16:15:00Z", "priority": 5,
                         "assignee": {"id": 6728, "name": "...",
@@ -216,12 +247,13 @@ def build_view(
     else:
         severity = "ok"
 
-    semana = _parse(payload.get("week_start"))
+    # week_start se calcula aqui, no se lee del payload: el flow lo sigue
+    # emitiendo pero no lo consume nadie, asi que es peso muerto hasta la proxima
+    # edicion del clientdata por un motivo real.
+    semana = week_start(now, week_weekday, week_time)
     return {
         "clock": now.astimezone(LIMA).strftime("%H:%M"),
-        "week_label": (
-            f"semana desde {semana.astimezone(LIMA):%a %-d, %H:%M}" if semana else ""
-        ),
+        "week_label": f"semana desde {semana:%a %-d, %H:%M}",
         "severity": severity,
         "problem": severity != "ok",
         "headline": (
@@ -312,6 +344,8 @@ class PanelCache:
                 horizon_hours=settings["horizon_hours"],
                 max_rows=settings["max_rows"],
                 show_people=settings["show_people"],
+                week_weekday=settings["week_weekday"],
+                week_time=settings["week_time"],
             )
             edad = int(age or 0)
             view["age_seconds"] = edad

@@ -158,6 +158,52 @@ class BuildViewTest(unittest.TestCase):
         self.assertIn("07:30", v["week_label"])        # mie 07:30 Lima = 12:30Z
 
 
+class WeekStartTest(unittest.TestCase):
+    """El corte vive en la config de quiosco, no en el flow: no es un hecho de
+    los datos como el calendario habil, es cuando se reune el equipo."""
+
+    def _cut(self, cuando):
+        return itsm_panel.week_start(cuando).strftime("%Y-%m-%d %H:%M")
+
+    def test_lunes_mira_al_miercoles_anterior(self):
+        # Lunes 2026-08-31 16:00Z = 11:00 Lima -> el corte fue el mie 26.
+        self.assertEqual(self._cut(datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc)),
+                         "2026-08-26 07:30")
+
+    def test_el_miercoles_antes_de_la_hora_sigue_en_la_semana_vieja(self):
+        # Mie 2026-09-02 11:00Z = 06:00 Lima, antes de las 07:30: la reunion aun
+        # no paso, asi que la semana en curso empezo hace siete dias.
+        self.assertEqual(self._cut(datetime(2026, 9, 2, 11, 0, tzinfo=timezone.utc)),
+                         "2026-08-26 07:30")
+
+    def test_el_miercoles_pasada_la_hora_abre_semana(self):
+        self.assertEqual(self._cut(datetime(2026, 9, 2, 13, 0, tzinfo=timezone.utc)),
+                         "2026-09-02 07:30")
+
+    def test_nunca_devuelve_un_corte_futuro(self):
+        for dia in range(1, 15):
+            cuando = datetime(2026, 9, dia, 18, 0, tzinfo=timezone.utc)
+            with self.subTest(dia=dia):
+                self.assertLessEqual(itsm_panel.week_start(cuando),
+                                     cuando.astimezone(itsm_panel.LIMA))
+
+    def test_se_puede_mover_el_corte_sin_tocar_codigo(self):
+        # Jueves 09:00 en vez de miercoles 07:30.
+        cuando = datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc)   # lunes
+        self.assertEqual(itsm_panel.week_start(cuando, 4, "09:00").strftime("%Y-%m-%d %H:%M"),
+                         "2026-08-27 09:00")
+
+    def test_hora_malformada_cae_al_default(self):
+        cuando = datetime(2026, 8, 31, 16, 0, tzinfo=timezone.utc)
+        self.assertEqual(itsm_panel.week_start(cuando, 3, "basura").strftime("%H:%M"), "07:30")
+
+    def test_el_payload_ya_no_manda_la_semana(self):
+        # El flow sigue emitiendo week_start pero viaja de pasajero.
+        raro = dict(_payload([]), week_start="2099-01-01T00:00:00Z")
+        v = itsm_panel.build_view(raro, now=AHORA)
+        self.assertNotIn("2099", v["week_label"])
+
+
 class SettingsTest(unittest.TestCase):
     def test_la_url_del_flow_viene_del_entorno(self):
         # Lleva el SAS: no puede vivir en config.json.
@@ -188,6 +234,15 @@ class RenderTest(unittest.TestCase):
 
 
 
+def _settings(**over):
+    """Settings reales, no un dict a mano: si el modulo gana una clave, estos
+    tests la heredan en vez de romperse con un KeyError."""
+    with mock.patch.dict(os.environ, {"ITSM_PANEL_FLOW_URL": "https://flow.example/run"}):
+        s = itsm_panel.panel_settings({})
+    s.update(over)
+    return s
+
+
 class TransportTest(unittest.IsolatedAsyncioTestCase):
     """El trigger del flow es GET. Postear devuelve 4xx y el panel lo mostraria
     como 'fuente caida', que es un sintoma que despista."""
@@ -201,9 +256,7 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json=payload if payload is not None else _payload([]))
 
         cache = itsm_panel.PanelCache(ttl_seconds=300)
-        settings = {"flow_url": "https://flow.example/run?sig=xxx",
-                    "refresh_seconds": 300, "poll_seconds": 60,
-                    "horizon_hours": 168, "max_rows": 8, "show_people": True}
+        settings = _settings()
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
             view = await cache.get(settings, c)
         return visto, view, cache
@@ -220,9 +273,7 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json=_payload([]))
 
         cache = itsm_panel.PanelCache(ttl_seconds=300)
-        settings = {"flow_url": "https://flow.example/run", "refresh_seconds": 300,
-                    "poll_seconds": 60, "horizon_hours": 168, "max_rows": 8,
-                    "show_people": True}
+        settings = _settings()
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
             await cache.get(settings, c)
             await cache.get(settings, c)
@@ -241,9 +292,7 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json=respuestas.pop(0) if respuestas else {})
 
         cache = itsm_panel.PanelCache(ttl_seconds=0)   # siempre refresca
-        settings = {"flow_url": "https://flow.example/run", "refresh_seconds": 0,
-                    "poll_seconds": 60, "horizon_hours": 168, "max_rows": 8,
-                    "show_people": True}
+        settings = _settings()
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
             await cache.get(settings, c)
             view = await cache.get(settings, c)      # llega basura
@@ -251,8 +300,7 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_sin_url_configurada_no_inventa_una_vista(self):
         cache = itsm_panel.PanelCache()
-        settings = {"flow_url": "", "refresh_seconds": 300, "poll_seconds": 60,
-                    "horizon_hours": 168, "max_rows": 8, "show_people": True}
+        settings = _settings(flow_url="")
         async with httpx.AsyncClient() as c:
             with self.assertRaises(RuntimeError):
                 await cache.get(settings, c)
