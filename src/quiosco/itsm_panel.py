@@ -33,6 +33,7 @@ import asyncio
 import logging
 import os
 import time
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -60,6 +61,14 @@ DEFAULT_MAX_ROWS = 8
 # produccion.
 DEFAULT_WEEK_WEEKDAY = 3           # ISO: 1=lunes ... 7=domingo
 DEFAULT_WEEK_TIME = "07:30"
+
+# Las fotos son datos estaticos de ~12 personas que cambian cuando entra o sale
+# alguien, no cada 5 minutos. Se bajan una vez por Graph a 48x48 y viven en
+# disco; meterlas en el agregado seria mandar 19 KB de binario en cada llamada.
+# Sin manifiesto a proposito: el archivo <id>.jpg existe o no, asi no hay indice
+# que se desincronice de los archivos.
+PHOTO_DIR = Path("static/photos")
+PHOTO_URL = "/static/photos/{}.jpg"
 
 LIMA = timezone(timedelta(hours=-5))
 # strftime("%a") usa el locale del proceso, que en el contenedor es C: escribia
@@ -135,6 +144,18 @@ def band_for(hours: float) -> str:
     return "neutro"
 
 
+def available_photos(directory: Path = PHOTO_DIR) -> frozenset[str]:
+    """Ids de asignatario que tienen foto en disco.
+
+    La cobertura no es total y no es un caso de borde: hoy 11 de 12 personas con
+    cuenta activa. Las iniciales son camino principal para el resto.
+    """
+    try:
+        return frozenset(p.stem for p in directory.glob("*.jpg"))
+    except OSError:
+        return frozenset()
+
+
 def week_start(now: datetime, weekday: int = DEFAULT_WEEK_WEEKDAY,
                hhmm: str = DEFAULT_WEEK_TIME) -> datetime:
     """Inicio de la semana EN CURSO: el ultimo corte <= ahora, en hora de Lima.
@@ -196,6 +217,7 @@ def build_view(
     show_people: bool = True,
     week_weekday: int = DEFAULT_WEEK_WEEKDAY,
     week_time: str = DEFAULT_WEEK_TIME,
+    photo_ids: frozenset[str] = frozenset(),
 ) -> dict:
     """Modelo de vista a partir del agregado que publica el flow.
 
@@ -205,10 +227,10 @@ def build_view(
           "generated_at": "2026-08-31T16:11:00Z",
           # El flow todavia emite "week_start", pero se IGNORA: lo calcula
           # week_start() desde la config de este lado.
+          # assignee NO trae foto: esas viven en disco (ver PHOTO_DIR).
           "at_risk": [ {"id": 65036, "kind": "TTR",
                         "due": "2026-08-28T16:15:00Z", "priority": 5,
-                        "assignee": {"id": 6728, "name": "...",
-                                     "photo": "data:image/jpeg;base64,..."}} ],
+                        "assignee": {"id": 6728, "name": "..."}} ],
           "counts": {"breached_ttf": 35, "breached_ttr": 30,
                      "untriaged": 26, "waiting_user": 64, "active": 69}
         }
@@ -238,6 +260,7 @@ def build_view(
 
         quien = t.get("assignee") or {}
         nombre = display_name(quien.get("name"))
+        pid = str(quien.get("id") or "")
         filas.append({
             "id": t.get("id"),
             "kind": str(t.get("kind") or "").upper()[:3],
@@ -247,8 +270,8 @@ def build_view(
             "priority": t.get("priority"),
             "name": nombre if show_people else "",
             "initials": initials(nombre) if (show_people and nombre) else "",
-            "photo": (quien.get("photo") or "") if show_people else "",
-            "unassigned": not quien.get("id"),
+            "photo": PHOTO_URL.format(pid) if (show_people and pid in photo_ids) else "",
+            "unassigned": not pid,
         })
 
     filas.sort(key=lambda f: f["hours"])
@@ -370,6 +393,7 @@ class PanelCache:
                 show_people=settings["show_people"],
                 week_weekday=settings["week_weekday"],
                 week_time=settings["week_time"],
+                photo_ids=available_photos(),
             )
             edad = int(age or 0)
             view["age_seconds"] = edad

@@ -32,6 +32,10 @@ services:
     volumes:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots
+      # Fotos de los tecnicos (48x48, bajadas una vez por Graph). Van por
+      # volumen y no en la imagen: cambian cuando entra o sale alguien, no
+      # cuando se publica una version.
+      - ./static/photos:/app/static/photos
       - ./data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/status"]

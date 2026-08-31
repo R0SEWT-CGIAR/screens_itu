@@ -31,6 +31,10 @@ services:
     volumes:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots
+      # Fotos de los tecnicos (48x48, bajadas una vez por Graph). Van por
+      # volumen y no en la imagen: cambian cuando entra o sale alguien, no
+      # cuando se publica una version.
+      - ./static/photos:/app/static/photos
       - ./data:/app/data
     pids_limit: 512
     mem_limit: 2g

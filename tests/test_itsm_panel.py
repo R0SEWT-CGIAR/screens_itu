@@ -134,11 +134,31 @@ class BuildViewTest(unittest.TestCase):
         self.assertEqual(v["rows"][0]["photo"], "")
 
     def test_show_people_apagado_borra_nombre_foto_e_iniciales(self):
-        v = itsm_panel.build_view(
-            _payload([_ticket(1, nombre="Perez, Ana", photo="data:image/jpeg;base64,zz")]),
-            now=AHORA, show_people=False)
+        v = itsm_panel.build_view(_payload([_ticket(1, nombre="Perez, Ana", aid=19)]),
+                                  now=AHORA, show_people=False,
+                                  photo_ids=frozenset({"19"}))
         r = v["rows"][0]
         self.assertEqual((r["name"], r["initials"], r["photo"]), ("", "", ""))
+
+    def test_la_foto_sale_de_disco_cuando_el_archivo_existe(self):
+        v = itsm_panel.build_view(_payload([_ticket(1, aid=6554)]), now=AHORA,
+                                  photo_ids=frozenset({"6554"}))
+        self.assertEqual(v["rows"][0]["photo"], "/static/photos/6554.jpg")
+
+    def test_sin_archivo_no_hay_foto_y_quedan_las_iniciales(self):
+        # 1 de cada 12 personas activas no tiene foto: esto es camino principal.
+        v = itsm_panel.build_view(_payload([_ticket(1, nombre="Matos, Diana", aid=6690)]),
+                                  now=AHORA, photo_ids=frozenset({"6554"}))
+        self.assertEqual(v["rows"][0]["photo"], "")
+        self.assertEqual(v["rows"][0]["initials"], "DM")
+
+    def test_el_payload_no_puede_inyectar_una_foto(self):
+        # Las fotos vienen de disco, no del flow: si el agregado trajera un
+        # data: URI se ignora, para que no haya dos mecanismos.
+        t = _ticket(1, aid=6554)
+        t["assignee"]["photo"] = "data:image/jpeg;base64,zz"
+        v = itsm_panel.build_view(_payload([t]), now=AHORA)
+        self.assertEqual(v["rows"][0]["photo"], "")
 
     def test_stamp_sin_zona_se_lee_como_utc(self):
         # SharePoint emite UTC en raw; tratarlo como hora local corre el reloj 5 h.
@@ -349,6 +369,18 @@ class WeekLabelTest(unittest.TestCase):
         v = itsm_panel.build_view(_payload([]), now=AHORA)
         self.assertIn("mié", v["week_label"])
         self.assertNotIn("Wed", v["week_label"])
+
+
+class DisplayNameBordesTest(unittest.TestCase):
+    def test_sin_espacio_despues_de_la_coma(self):
+        # Caso real de la lista: "Zamudio,Tatiana (CIP)". Separar por ", " se lo
+        # comeria; hay que separar por "," y hacer trim.
+        self.assertEqual(itsm_panel.display_name("Zamudio,Tatiana (CIP)"),
+                         "Tatiana Zamudio")
+
+    def test_espacios_raros_alrededor_de_la_coma(self):
+        self.assertEqual(itsm_panel.display_name("  Matos ,  Diana  (CIP) "),
+                         "Diana Matos")
 
 if __name__ == "__main__":
     unittest.main()
