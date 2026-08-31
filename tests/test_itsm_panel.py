@@ -126,8 +126,11 @@ class BuildViewTest(unittest.TestCase):
     def test_iniciales_cuando_no_hay_foto(self):
         # El conector devuelve 404 para quien no tiene foto: las iniciales son
         # el camino normal para varios, no un caso raro.
+        # "Perez, Ana" se muestra como "Ana Perez", asi que las iniciales son
+        # AP: siguen al nombre que se ve, no al que guarda SharePoint.
         v = itsm_panel.build_view(_payload([_ticket(1, nombre="Perez, Ana")]), now=AHORA)
-        self.assertEqual(v["rows"][0]["initials"], "PA")
+        self.assertEqual(v["rows"][0]["name"], "Ana Perez")
+        self.assertEqual(v["rows"][0]["initials"], "AP")
         self.assertEqual(v["rows"][0]["photo"], "")
 
     def test_show_people_apagado_borra_nombre_foto_e_iniciales(self):
@@ -304,6 +307,48 @@ class TransportTest(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient() as c:
             with self.assertRaises(RuntimeError):
                 await cache.get(settings, c)
+
+
+class DisplayNameTest(unittest.TestCase):
+    """SharePoint entrega "Apellido, Nombre  (ORG)"; la pared quiere otra cosa."""
+
+    def test_voltea_apellido_nombre(self):
+        self.assertEqual(itsm_panel.display_name("Rodriguez, Saul"), "Saul Rodriguez")
+
+    def test_quita_el_sufijo_de_organizacion_y_el_doble_espacio(self):
+        self.assertEqual(itsm_panel.display_name("Rodriguez, Saul  (CIP)"),
+                         "Saul Rodriguez")
+
+    def test_dos_apellidos_sobreviven(self):
+        # El caso peruano: la coma marca donde termina el apellido, asi que
+        # voltear por la coma es seguro y partir por espacios no lo seria.
+        self.assertEqual(itsm_panel.display_name("Garcia Perez, Juan Carlos  (CIP)"),
+                         "Juan Carlos Garcia Perez")
+
+    def test_sin_coma_se_deja_como_esta(self):
+        self.assertEqual(itsm_panel.display_name("Peris Waithira"), "Peris Waithira")
+
+    def test_dos_comas_no_se_tocan(self):
+        # No se sabe cual separa que; mejor mostrarlo crudo que inventar.
+        self.assertEqual(itsm_panel.display_name("Uno, Dos, Tres"), "Uno, Dos, Tres")
+
+    def test_vacio(self):
+        self.assertEqual(itsm_panel.display_name(""), "")
+        self.assertEqual(itsm_panel.display_name(None), "")
+
+    def test_las_iniciales_siguen_al_nombre_mostrado(self):
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, nombre="Rodriguez, Saul  (CIP)")]), now=AHORA)
+        self.assertEqual(v["rows"][0]["name"], "Saul Rodriguez")
+        self.assertEqual(v["rows"][0]["initials"], "SR")
+
+
+class WeekLabelTest(unittest.TestCase):
+    def test_el_dia_sale_en_espanol(self):
+        # strftime("%a") daba "Wed" con el locale C del contenedor.
+        v = itsm_panel.build_view(_payload([]), now=AHORA)
+        self.assertIn("mié", v["week_label"])
+        self.assertNotIn("Wed", v["week_label"])
 
 if __name__ == "__main__":
     unittest.main()

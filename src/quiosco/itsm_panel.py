@@ -62,6 +62,10 @@ DEFAULT_WEEK_WEEKDAY = 3           # ISO: 1=lunes ... 7=domingo
 DEFAULT_WEEK_TIME = "07:30"
 
 LIMA = timezone(timedelta(hours=-5))
+# strftime("%a") usa el locale del proceso, que en el contenedor es C: escribia
+# "Wed" en un panel en español. Se traduce a mano en vez de depender de que la
+# imagen tenga el locale es_PE generado.
+DIAS = ("lun", "mar", "mié", "jue", "vie", "sáb", "dom")
 
 
 # --- Configuracion ---
@@ -153,6 +157,25 @@ def week_start(now: datetime, weekday: int = DEFAULT_WEEK_WEEKDAY,
     return corte
 
 
+def display_name(raw: str) -> str:
+    """El nombre como se lee en una pared, no como lo guarda SharePoint.
+
+    Llega "Rodriguez, Saul  (CIP)": doble espacio, apellido primero y sufijo de
+    organizacion que no aporta nada en una pantalla interna. Se voltea solo si
+    hay UNA coma, que es lo que hace seguro el caso peruano de dos apellidos
+    ("Garcia Perez, Juan Carlos" -> "Juan Carlos Garcia Perez").
+    """
+    limpio = " ".join(str(raw or "").split())
+    # Sufijos de organizacion entre parentesis al final: "(CIP)", "(CGIAR)".
+    while limpio.endswith(")") and "(" in limpio:
+        limpio = limpio[:limpio.rindex("(")].rstrip()
+    if limpio.count(",") == 1:
+        apellido, nombre = (p.strip() for p in limpio.split(","))
+        if apellido and nombre:
+            return f"{nombre} {apellido}"
+    return limpio
+
+
 def initials(name: str) -> str:
     """Iniciales para quien no tiene foto: el conector devuelve 404 y sin esto
     la fila quedaria coja."""
@@ -214,7 +237,7 @@ def build_view(
             continue
 
         quien = t.get("assignee") or {}
-        nombre = str(quien.get("name") or "").strip()
+        nombre = display_name(quien.get("name"))
         filas.append({
             "id": t.get("id"),
             "kind": str(t.get("kind") or "").upper()[:3],
@@ -253,7 +276,8 @@ def build_view(
     semana = week_start(now, week_weekday, week_time)
     return {
         "clock": now.astimezone(LIMA).strftime("%H:%M"),
-        "week_label": f"semana desde {semana:%a %-d, %H:%M}",
+        "week_label": (f"semana desde {DIAS[semana.weekday()]} {semana.day} "
+                       f"{semana:%H:%M}"),
         "severity": severity,
         "problem": severity != "ok",
         "headline": (
