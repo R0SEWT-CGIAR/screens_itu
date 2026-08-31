@@ -30,6 +30,7 @@ a g2-senior):
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -430,15 +431,25 @@ class PanelCache:
                         raise RuntimeError(
                             "Falta ITSM_PANEL_FLOW_URL en el entorno del contenedor"
                         )
-                    # GET, no POST: el trigger del flow es de lectura. Lo fija
-                    # un test porque cambiarlo por analogia con otros flows del
-                    # environment (CreateQaTicketFromApi si es POST) rompe en
-                    # silencio con un 4xx que se veria como "fuente caida".
-                    r = await client.get(
-                        settings["flow_url"], timeout=DEFAULT_TIMEOUT_SECONDS
-                    )
-                    r.raise_for_status()
-                    payload = r.json()
+                    # file:// sirve un agregado guardado en disco. Es para
+                    # iterar el diseño en la laptop sin llevarse la URL con SAS
+                    # del flow, y ademas da un dataset estable: los datos no se
+                    # mueven bajo los pies mientras se ajusta el layout.
+                    if settings["flow_url"].startswith("file://"):
+                        payload = json.loads(
+                            Path(settings["flow_url"][7:]).read_text()
+                        )
+                    else:
+                        # GET, no POST: el trigger del flow es de lectura. Lo
+                        # fija un test porque cambiarlo por analogia con otros
+                        # flows del environment (CreateQaTicketFromApi si es
+                        # POST) rompe en silencio con un 4xx que se veria como
+                        # "fuente caida".
+                        r = await client.get(
+                            settings["flow_url"], timeout=DEFAULT_TIMEOUT_SECONDS
+                        )
+                        r.raise_for_status()
+                        payload = r.json()
                     # Se valida antes de cachear: un agregado malformado no debe
                     # desplazar al ultimo bueno.
                     build_view(payload)

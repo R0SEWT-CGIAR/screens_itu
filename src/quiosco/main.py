@@ -24,7 +24,24 @@ from .screenshot_assets import screenshot_asset_key, screenshot_asset_revision
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.json"
+def _resolve_config_path() -> Path:
+    """Ruta del config.json, sobreescribible por QUIOSCO_CONFIG.
+
+    Existe por seguridad, no por comodidad: el config del repo trae las IPs
+    reales de los Chromecast, asi que levantar la app en la laptop para probar
+    algo secuestraba las pantallas de produccion — connect() se conecta y
+    auto_start_rotation las pone a rotar. Antes eso solo se evitaba acordandose;
+    ahora se evita apuntando la variable a un harness.
+    """
+    override = os.environ.get("QUIOSCO_CONFIG", "").strip()
+    if override:
+        ruta = Path(override).expanduser().resolve()
+        logger.info("config.json desde QUIOSCO_CONFIG: %s", ruta)
+        return ruta
+    return Path(__file__).resolve().parents[2] / "config.json"
+
+
+_CONFIG_PATH = _resolve_config_path()
 
 PROXY_FALLBACK = "http://172.25.19.179:8000"
 PRTG_HOST = "172.25.0.22"
