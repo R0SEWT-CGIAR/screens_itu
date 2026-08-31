@@ -79,9 +79,16 @@ class BuildViewTest(unittest.TestCase):
             _payload([_ticket(1, horas=-3), _ticket(2, horas=1)]), now=AHORA)
         self.assertEqual([r["id"] for r in v["rows"]], [2])
 
-    def test_fuera_del_horizonte_no_se_lista(self):
-        v = itsm_panel.build_view(_payload([_ticket(1, horas=100)]),
-                                  now=AHORA, horizon_hours=48)
+    def test_el_horizonte_es_red_de_seguridad_no_criterio(self):
+        # Quien selecciona es el flow, en dias habiles. Un viernes, algo que
+        # vence el martes esta a ~90 h de pared y DEBE seguir mostrandose: si el
+        # panel recortara a 48 h escondaria lo que el flow eligio, y se vaciaria
+        # todo el fin de semana afirmando que no hay riesgo.
+        v = itsm_panel.build_view(_payload([_ticket(1, horas=90)]), now=AHORA)
+        self.assertEqual([r["id"] for r in v["rows"]], [1])
+
+    def test_el_tope_igual_atrapa_un_flow_con_bug(self):
+        v = itsm_panel.build_view(_payload([_ticket(1, horas=800)]), now=AHORA)
         self.assertEqual(v["rows"], [])
 
     def test_severidad_por_urgencia(self):

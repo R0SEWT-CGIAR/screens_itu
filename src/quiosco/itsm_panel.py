@@ -45,7 +45,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_REFRESH_SECONDS = 300      # ventana de cache contra el flow
 DEFAULT_POLL_SECONDS = 60          # cada cuanto repinta la pagina
 DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_HORIZON_HOURS = 48         # que tan lejos mira "por brechearse"
+# Red de seguridad, no criterio de seleccion: quien decide que esta "por
+# brechearse" es el flow, y lo hace en DIAS HABILES, no en horas de pared. Un
+# viernes 14:00, las proximas 48 h de pared llegan al domingo, donde no vence
+# nada: el panel se vaciaria el fin de semana afirmando que no hay riesgo. Este
+# tope solo evita que un flow con un bug ponga en pantalla algo de dentro de un
+# mes; si recortara antes que el flow, estaria escondiendo lo que el flow eligio.
+DEFAULT_HORIZON_HOURS = 168
 DEFAULT_MAX_ROWS = 8
 
 LIMA = timezone(timedelta(hours=-5))
@@ -140,8 +146,11 @@ def build_view(
     Contrato esperado (lo define quiosco, lo cumple el flow):
 
         {
-          "generated_at": "2026-08-28T16:11:00Z",
-          "week_start":   "2026-08-26T12:30:00Z",   # mie 07:30 Lima
+          "generated_at": "2026-08-31T16:11:00Z",
+          # Inicio de la semana EN CURSO: el ultimo miercoles 12:30Z (= 07:30
+          # Lima, el corte de la reunion) que sea <= ahora. Nunca uno futuro:
+          # un "% de la semana" necesita un inicio en el pasado que contar.
+          "week_start":   "2026-08-26T12:30:00Z",
           "at_risk": [ {"id": 65036, "kind": "TTR",
                         "due": "2026-08-28T16:15:00Z", "priority": 5,
                         "assignee": {"id": 6728, "name": "...",
@@ -170,7 +179,7 @@ def build_view(
         horas = (vence - now).total_seconds() / 3600
         # Lo ya vencido no se lista: el panel es de los que todavia se pueden
         # salvar. Los vencidos van en los contadores del equipo.
-        if horas < 0 or horas > horizon_hours:
+        if horas < 0 or horas > horizon_hours:  # el tope es red de seguridad
             continue
 
         quien = t.get("assignee") or {}

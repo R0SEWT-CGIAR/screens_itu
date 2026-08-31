@@ -94,7 +94,7 @@
   "itsm_panel": {
     "refresh_seconds": 300,
     "poll_seconds": 60,
-    "horizon_hours": 48,
+    "horizon_hours": 168,
     "max_rows": 8,
     "show_people": true
   }
