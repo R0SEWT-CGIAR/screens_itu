@@ -5,6 +5,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+import pathlib
+
 import httpx
 
 from quiosco import itsm_panel
@@ -381,6 +383,35 @@ class DisplayNameBordesTest(unittest.TestCase):
     def test_espacios_raros_alrededor_de_la_coma(self):
         self.assertEqual(itsm_panel.display_name("  Matos ,  Diana  (CIP) "),
                          "Diana Matos")
+
+
+class AvailablePhotosTest(unittest.TestCase):
+    def test_lee_los_ids_del_directorio(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            base = pathlib.Path(d)
+            (base / "6554.jpg").write_bytes(b"x")
+            (base / "19.jpg").write_bytes(b"x")
+            (base / "leeme.txt").write_text("no soy foto")
+            self.assertEqual(itsm_panel.available_photos(base), frozenset({"6554", "19"}))
+
+    def test_directorio_inexistente_no_revienta(self):
+        self.assertEqual(itsm_panel.available_photos(pathlib.Path("/no/existe/x")),
+                         frozenset())
+
+    def test_cero_fotos_avisa_una_sola_vez(self):
+        # El fallo del volumen sin montar se degrada a algo que parece una
+        # decision de diseño: todas las filas caen a iniciales y nada falla.
+        import tempfile
+        itsm_panel._aviso_fotos = False
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertLogs("quiosco.itsm_panel", level="WARNING") as cm:
+                itsm_panel.available_photos(pathlib.Path(d))
+            self.assertIn("0 fotos", cm.output[0])
+            # La segunda vez no repite: se llama en cada poll y llenaria el log.
+            with self.assertNoLogs("quiosco.itsm_panel", level="WARNING"):
+                itsm_panel.available_photos(pathlib.Path(d))
+        itsm_panel._aviso_fotos = False
 
 if __name__ == "__main__":
     unittest.main()

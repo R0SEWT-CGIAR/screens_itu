@@ -144,16 +144,34 @@ def band_for(hours: float) -> str:
     return "neutro"
 
 
+_aviso_fotos = False
+
+
 def available_photos(directory: Path = PHOTO_DIR) -> frozenset[str]:
     """Ids de asignatario que tienen foto en disco.
 
-    La cobertura no es total y no es un caso de borde: hoy 11 de 12 personas con
+    La cobertura no es total y no es un caso de borde: hoy 12 de 13 personas con
     cuenta activa. Las iniciales son camino principal para el resto.
+
+    Si NO hay ninguna foto se avisa una vez. El motivo es que este fallo se
+    degrada a algo que parece una decision de diseño: sin el volumen montado
+    —que es justo lo que paso— todas las filas caen a iniciales y no falla nada
+    visible. Los fallos que gritan se arreglan solos; los que se ven normales
+    necesitan que alguien vaya a mirar.
     """
+    global _aviso_fotos
     try:
-        return frozenset(p.stem for p in directory.glob("*.jpg"))
+        ids = frozenset(p.stem for p in directory.glob("*.jpg"))
     except OSError:
-        return frozenset()
+        ids = frozenset()
+    if not ids and not _aviso_fotos:
+        _aviso_fotos = True
+        logger.warning(
+            "Panel ITSM: 0 fotos en %s (existe=%s). Todas las filas van a caer a "
+            "iniciales; si no es lo esperado, revisar el volumen static/photos.",
+            directory, directory.is_dir(),
+        )
+    return ids
 
 
 def week_start(now: datetime, weekday: int = DEFAULT_WEEK_WEEKDAY,
