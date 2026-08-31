@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from pathlib import Path
 
-from . import config_store, health, prtg_panel, uptime_panel
+from . import config_store, health, itsm_panel, prtg_panel, uptime_panel
 from .cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
 from .runtime_monitor import start_runtime_monitor_task
 from .screenshot import start_live_screenshot_task, start_screenshot_task
@@ -101,13 +101,17 @@ panel_cache = uptime_panel.PanelCache()
 # redirecciones a ciegas.
 prtg_client: httpx.AsyncClient | None = None
 prtg_cache = prtg_panel.PanelCache()
+# El agregado del ITSM lo publica un flow de Power Automate: exodia no tiene
+# credenciales de SharePoint. La URL lleva el SAS y va por entorno.
+itsm_client: httpx.AsyncClient | None = None
+itsm_cache = itsm_panel.PanelCache()
 # Pedidos de recaptura de GIF desde la consola; la crea el lifespan.
 recapture_queue: "asyncio.Queue[str] | None" = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global proxy_client, panel_client, prtg_client
+    global proxy_client, panel_client, prtg_client, itsm_client
     proxy_client = httpx.AsyncClient(verify=False, timeout=30, follow_redirects=True)
     panel_client = httpx.AsyncClient(timeout=uptime_panel.DEFAULT_TIMEOUT_SECONDS,
                                      follow_redirects=True)
@@ -115,6 +119,9 @@ async def lifespan(app: FastAPI):
     prtg_client = httpx.AsyncClient(verify=False,
                                     timeout=prtg_panel.DEFAULT_TIMEOUT_SECONDS)
     prtg_cache.ttl_seconds = prtg_panel.panel_settings(manager.config)["refresh_seconds"]
+    itsm_client = httpx.AsyncClient(timeout=itsm_panel.DEFAULT_TIMEOUT_SECONDS,
+                                    follow_redirects=True)
+    itsm_cache.ttl_seconds = itsm_panel.panel_settings(manager.config)["refresh_seconds"]
     manager.connect()
     # Sin esto un reboot deja los Chromecast conectados pero en negro: connect()
     # no rota. Los que no esten listos aun los recoge el watchdog.
@@ -170,6 +177,7 @@ async def lifespan(app: FastAPI):
     await proxy_client.aclose()
     await panel_client.aclose()
     await prtg_client.aclose()
+    await itsm_client.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -608,6 +616,36 @@ async def prtg_panel_page():
         )
     return HTMLResponse(
         prtg_panel.render_html(view, refresh_seconds=settings["refresh_seconds"])
+    )
+
+
+@app.get("/api/itsm-panel")
+async def itsm_panel_data():
+    """Vista del panel de tickets en JSON. La consume el poll de la pagina."""
+    settings = itsm_panel.panel_settings(manager.config)
+    try:
+        return await itsm_cache.get(settings, itsm_client)
+    except Exception as exc:  # noqa: BLE001 - sin cache previa no hay que servir
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo leer el agregado del ITSM: {type(exc).__name__}",
+        )
+
+
+@app.get("/panel/itsm", response_class=HTMLResponse)
+async def itsm_panel_page():
+    """Panel de tickets por brechearse. Ver el docstring de itsm_panel.py."""
+    settings = itsm_panel.panel_settings(manager.config)
+    try:
+        view = await itsm_cache.get(settings, itsm_client)
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(
+            itsm_panel.render_error_html(
+                str(exc) if isinstance(exc, (ValueError, RuntimeError)) else type(exc).__name__),
+            status_code=200,
+        )
+    return HTMLResponse(
+        itsm_panel.render_html(view, poll_seconds=settings["poll_seconds"])
     )
 
 

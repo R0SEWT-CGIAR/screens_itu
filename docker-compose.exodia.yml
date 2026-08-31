@@ -25,6 +25,9 @@ services:
       # se edita desde la consola web. Es el passhash, no la contrasena.
       - PRTG_USER=${PRTG_USER:-}
       - PRTG_PASSHASH=${PRTG_PASSHASH:-}
+      # URL con SAS del flow OPS - ITSM Panel Aggregate (http). Es la
+      # credencial: va en el .env de la maquina, nunca en config.json.
+      - ITSM_PANEL_FLOW_URL=${ITSM_PANEL_FLOW_URL:-}
     volumes:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots

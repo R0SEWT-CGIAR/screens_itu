@@ -90,5 +90,12 @@
     "max_issues": 8,
     "show_unusual": false,
     "hidden_groups": []
+  },
+  "itsm_panel": {
+    "refresh_seconds": 300,
+    "poll_seconds": 60,
+    "horizon_hours": 48,
+    "max_rows": 8,
+    "show_people": true
   }
 }
