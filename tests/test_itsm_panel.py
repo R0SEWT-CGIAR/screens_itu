@@ -127,6 +127,15 @@ class BuildViewTest(unittest.TestCase):
         self.assertEqual(v["counts"]["breached_ttf"], 35)
         self.assertEqual(v["counts"]["waiting_user"], 64)
 
+    def test_una_clave_nueva_en_counts_no_rompe_nada(self):
+        # El agregado puede crecer sin coordinar despliegues: la vista lee las
+        # claves que conoce y las demas ni las mira. Lo fija un test porque el
+        # flow tiene previsto añadir counts.no_deadline.
+        v = itsm_panel.build_view(
+            _payload([], breached_ttf=7, no_deadline=5), now=AHORA)
+        self.assertEqual(v["counts"]["breached_ttf"], 7)
+        self.assertNotIn("no_deadline", v["counts"])
+
     def test_contadores_ausentes_o_basura_son_cero(self):
         v = itsm_panel.build_view({"at_risk": [], "counts": {"breached_ttf": "x"}}, now=AHORA)
         self.assertEqual(v["counts"]["breached_ttf"], 0)
@@ -136,6 +145,18 @@ class BuildViewTest(unittest.TestCase):
         t = _ticket(1, aid=None)
         v = itsm_panel.build_view(_payload([t]), now=AHORA)
         self.assertTrue(v["rows"][0]["unassigned"])
+
+    def test_un_asunto_vacio_se_marca_como_ausencia(self):
+        # Sin marcarlo, la fila queda con el numero de ticket y nada mas, que a
+        # tres metros se lee como render roto y no como dato que falta.
+        v = itsm_panel.build_view(
+            _payload([_ticket(1, subject=""), _ticket(2, subject="   ")]), now=AHORA)
+        self.assertTrue(all(r["subject_missing"] for r in v["rows"]))
+        self.assertTrue(all(r["subject"] == "" for r in v["rows"]))
+
+    def test_un_asunto_normal_no_se_marca(self):
+        v = itsm_panel.build_view(_payload([_ticket(1)]), now=AHORA)
+        self.assertFalse(v["rows"][0]["subject_missing"])
 
     def test_iniciales_cuando_no_hay_foto(self):
         # El conector devuelve 404 para quien no tiene foto: las iniciales son
@@ -519,6 +540,12 @@ class ContratoRotoTest(unittest.TestCase):
         self.assertEqual(v["headline"], "Datos ilegibles")
         self.assertNotIn("Nada por brechearse", v["headline"])
         self.assertNotEqual(v["severity"], "ok")
+
+    def test_dice_cuantas_filas_no_pudo_leer(self):
+        # El aviso de la pantalla se apoya en este numero: sin el, "datos
+        # ilegibles" no distingue una fila rota de un agregado entero roto.
+        v = itsm_panel.build_view(_payload([self._viejo(1), self._viejo(2)]), now=AHORA)
+        self.assertEqual(v["unreadable_rows"], 2)
 
     def test_lista_legitimamente_vacia_si_es_calma(self):
         # Sin filas en el agregado, "nada por brechearse" es la verdad.

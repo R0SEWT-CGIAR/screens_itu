@@ -320,6 +320,9 @@ def build_view(
             "band": band_for(proximo),
             "priority": t.get("priority"),
             "subject": asunto,
+            # Un ticket sin asunto deja la fila con el numero y nada mas, que se
+            # lee como render roto. Se marca para pintarlo como ausencia.
+            "subject_missing": not asunto,
             "requester": display_name(t.get("requester")),
             "ttf": _reloj(relojes.get("ttf")),
             "ttr": _reloj(relojes.get("ttr")),
@@ -377,6 +380,9 @@ def build_view(
         "severity": severity,
         "problem": severity != "ok",
         "broken_contract": contrato_roto,
+        # Cuantas filas llegaron sin una sola fecha legible. Con el
+        # contrato roto es el dato que hace concreto el aviso.
+        "unreadable_rows": sin_fecha,
         "headline": (
             "Datos ilegibles" if contrato_roto
             else (f"{n} por brechearse" if n else "Nada por brechearse")
@@ -526,6 +532,7 @@ _STYLE = """
   .tk { font-size:16px; font-weight:600; color:var(--tinta-3);
         font-variant-numeric:tabular-nums; margin-right:11px; }
   .asunto { font-size:22px; font-weight:550; letter-spacing:-.01em; }
+  .asunto.falta { color:var(--tinta-3); font-weight:450; font-style:italic; }
   .sol { display:block; font-size:14px; color:var(--tinta-3); margin-top:3px; }
 
   .quien { width:250px; text-align:right; white-space:nowrap; }
@@ -536,7 +543,13 @@ _STYLE = """
   .nom { font-size:17px; color:var(--tinta-2); margin-left:11px; vertical-align:middle; }
   .nom.sin { color:var(--tinta-3); }
 
-  .contexto { display:flex; gap:11px; margin-top:auto; padding-top:11px; }
+  /* El sobrante cae SIEMPRE contra el pie. Con tres o cuatro filas —el caso
+     comun, y el que mas se mira— un hueco entre la ultima fila y los
+     contadores se lee como que la pagina no termino de cargar; el mismo hueco
+     abajo se lee como que sobra sitio. Es la regla que ya seguia el estado
+     vacio, ahora para todos los estados. */
+  .contexto { display:flex; gap:11px; padding-top:11px; }
+  body footer { margin-top:auto; }
   .cx { flex:1; background:var(--superficie); border-radius:9px; padding:9px 14px;
         border-top:3px solid var(--neutro); }
   .cx.mal { border-top-color:var(--caida); }
@@ -546,18 +559,14 @@ _STYLE = """
   .cx-t { font-size:13px; color:var(--tinta-3); margin-top:1px; }
   .mas { font-size:14px; color:var(--tinta-3); padding:8px 0 0 14px; }
   .limpio { text-align:center; color:var(--ok); font-size:23px; font-weight:550; padding:26px 0 6px; }
+  .limpio.roto { color:var(--leve); }
   .limpio small { display:block; font-size:15px; color:var(--tinta-3); font-weight:400; margin-top:5px; }
   /* Con la lista vacia el espacio sobrante se lo quedan los contadores, que
      pasan a ser el contenido en vez de un pie de pagina. */
-  /* Pegados al mensaje, no al fondo: un hueco EN MEDIO parece que algo no
-     cargo; el mismo hueco ABAJO se lee como que sobra sitio. */
-  body.sin-riesgo .contexto { gap:14px; margin-top:20px; }
-  /* En el resto de estados es .contexto quien empuja hacia abajo; sin riesgo
-     hay que anclar el pie a mano o se sube con el contenido. */
-  body.sin-riesgo footer { margin-top:auto; }
-  body.sin-riesgo .cx { padding:22px 20px; }
-  body.sin-riesgo .cx-n { font-size:44px; }
-  body.sin-riesgo .cx-t { font-size:15px; margin-top:3px; }
+  body.sin-filas .contexto { gap:14px; margin-top:20px; }
+  body.sin-filas .cx { padding:22px 20px; }
+  body.sin-filas .cx-n { font-size:44px; }
+  body.sin-filas .cx-t { font-size:15px; margin-top:3px; }
 """
 
 _SCRIPT = """
@@ -584,10 +593,17 @@ function pintar(v) {
   document.getElementById('hero-sub').textContent = v.subline;
 
   const cuerpo = document.getElementById('filas');
-  document.body.classList.toggle('sin-riesgo', !v.rows.length && !v.broken_contract);
+  document.body.classList.toggle('sin-filas', !v.rows.length);
   if (!v.rows.length) {
-    cuerpo.innerHTML = `<tr><td class="limpio">Ningún ticket a punto de brechear
-      <small>lo que sigue es el estado de la cola</small></td></tr>`;
+    // El titular ya avisa que los datos son ilegibles; el cuerpo decia igual
+    // "Ningún ticket a punto de brechear", en el teal de todo bien. Media
+    // pantalla desmentia a la otra media, y la mitad tranquilizadora era la
+    // que mas saltaba a la vista.
+    cuerpo.innerHTML = v.broken_contract
+      ? `<tr><td class="limpio roto">${v.unreadable_rows} filas sin una fecha legible
+        <small>el panel no puede decir qué está en riesgo; los contadores vienen del mismo agregado</small></td></tr>`
+      : `<tr><td class="limpio">Ningún ticket a punto de brechear
+        <small>lo que sigue es el estado de la cola</small></td></tr>`;
   } else {
     cuerpo.innerHTML = v.rows.map(r => {
       let quien = `<span class="av sin">\\u2014</span><span class="nom sin">sin asignar</span>`;
@@ -597,10 +613,13 @@ function pintar(v) {
         quien = `${av}<span class="nom">${escapar(r.name)}</span>`;
       }
       const sol = r.requester ? `<span class="sol">solicita ${escapar(r.requester)}</span>` : '';
+      const asunto = r.subject_missing
+        ? `<span class="asunto falta">sin asunto</span>`
+        : `<span class="asunto">${escapar(r.subject)}</span>`;
       return `<tr class="fila ${r.band}">
         <td class="relojes">${chip('TTF', r.ttf, '')}${chip('TTR', r.ttr, r.ttr_state)}</td>
         <td class="que"><span class="tk">#${escapar(String(r.id))}</span>
-            <span class="asunto">${escapar(r.subject)}</span>${sol}</td>
+            ${asunto}${sol}</td>
         <td class="quien">${quien}</td>
       </tr>`;
     }).join('');
