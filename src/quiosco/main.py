@@ -173,6 +173,7 @@ async def lifespan(app: FastAPI):
     cola_history.retention_days = cola_settings["retention_days"]
     logger.info("Serie de la cola: %d muestras cargadas de %s",
                 cola_history.load(), cola_history.path)
+    cola_panel.aviso_si_no_hay_volumen(cola_history.path)
     manager.connect()
     # Sin esto un reboot deja los Chromecast conectados pero en negro: connect()
     # no rota. Los que no esten listos aun los recoge el watchdog.

@@ -96,6 +96,44 @@ def history_path(config_path: str | os.PathLike) -> Path:
     return Path(config_path).resolve().parent / "data" / HISTORY_FILENAME
 
 
+def aviso_si_no_hay_volumen(
+    path: Path,
+    *,
+    en_contenedor: Optional[bool] = None,
+    raiz_app: Path = Path("/app"),
+) -> Optional[str]:
+    """Grita si la serie va a caer DENTRO de la imagen en vez del volumen.
+
+    Este fallo pertenece a la peor familia: la que se degrada a algo que parece
+    normal. Sin el volumen montado el panel funciona, muestra su curva, y en el
+    siguiente despliegue la serie desaparece sin que nada falle a la vista —
+    justo lo contrario de la variable de entorno que falto hoy, que al menos
+    dijo su nombre en pantalla. Los fallos que gritan se arreglan solos.
+
+    Se comprueba solo dentro del contenedor y comparando dispositivos: si data/
+    esta en el mismo sistema de archivos que la raiz de la app, no hay bind
+    mount. En la laptop no aplica y no se avisa nada.
+    """
+    if en_contenedor is None:
+        en_contenedor = Path("/.dockerenv").exists()
+    if not en_contenedor:
+        return None
+    try:
+        dev_datos = path.parent.stat().st_dev
+        dev_app = raiz_app.stat().st_dev
+    except OSError:
+        return None
+    if dev_datos != dev_app:
+        return None
+    mensaje = (
+        f"La serie de la cola vive en {path.parent}, que NO es un volumen "
+        "montado: cada despliegue la va a borrar y el panel seguira "
+        "pintandose como si nada. Revisar el bind mount ./data:/app/data."
+    )
+    logger.error(mensaje)
+    return mensaje
+
+
 # --- La serie ---
 
 class ColaHistory:

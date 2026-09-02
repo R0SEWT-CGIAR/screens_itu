@@ -284,6 +284,42 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(p, Path("/home/cip-exodia/quiosco/data/cola-history.jsonl"))
 
 
+class VolumenTest(unittest.TestCase):
+    """El aviso del volumen. Es el fallo que se ve normal: el panel pinta su
+    curva y el despliegue siguiente se lleva la serie sin sintoma."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name) / "data" / "cola-history.jsonl"
+        self.path.parent.mkdir(parents=True)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_fuera_del_contenedor_no_avisa_nada(self):
+        # En la laptop data/ nunca es un mount y avisar seria ruido diario.
+        self.assertIsNone(
+            cola_panel.aviso_si_no_hay_volumen(self.path, en_contenedor=False))
+
+    def test_dentro_del_contenedor_y_sin_mount_grita(self):
+        # La raiz de la app y data/ en el mismo dispositivo = no hay bind mount.
+        with self.assertLogs("quiosco.cola_panel", level="ERROR") as log:
+            aviso = cola_panel.aviso_si_no_hay_volumen(
+                self.path, en_contenedor=True, raiz_app=Path(self.dir.name))
+        self.assertIn("NO es un volumen montado", aviso)
+        self.assertIn("./data:/app/data", log.output[0])
+
+    def test_con_mount_de_verdad_se_queda_callado(self):
+        # /proc siempre esta en otro dispositivo, asi que hace de doble de un
+        # bind mount sin tener que montar nada en el test.
+        self.assertIsNone(cola_panel.aviso_si_no_hay_volumen(
+            self.path, en_contenedor=True, raiz_app=Path("/proc")))
+
+    def test_una_raiz_que_no_existe_no_inventa_un_aviso(self):
+        self.assertIsNone(cola_panel.aviso_si_no_hay_volumen(
+            self.path, en_contenedor=True, raiz_app=Path("/no-existe-jamas")))
+
+
 class RenderTest(unittest.TestCase):
     def test_html_lleva_datos_y_endpoint(self):
         v = cola_panel.build_view(_muestras(3), now=AHORA)
