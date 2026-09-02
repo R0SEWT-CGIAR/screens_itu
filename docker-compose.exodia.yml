@@ -11,7 +11,7 @@
 #   reencuentra escaneando el /24 de su ultima IP conocida (>= 0.1.1).
 services:
   quiosco:
-    image: cipotato/quiosco:0.1.17
+    image: cipotato/quiosco:0.1.18
     init: true
     network_mode: host
     environment:
@@ -28,6 +28,9 @@ services:
       # URL con SAS del flow OPS - ITSM Panel Aggregate (http). Es la
       # credencial: va en el .env de la maquina, nunca en config.json.
       - ITSM_PANEL_FLOW_URL=${ITSM_PANEL_FLOW_URL:-}
+      # URL con SAS del flow OPS - ITSM Weekly Compliance, que es OTRA
+      # distinta de la anterior. Tambien vive solo en el .env.
+      - ITSM_WEEKLY_FLOW_URL=${ITSM_WEEKLY_FLOW_URL:-}
     volumes:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots

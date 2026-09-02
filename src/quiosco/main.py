@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from pathlib import Path
 
 from . import (cola_panel, config_store, health, itsm_panel, prtg_panel,
-               uptime_panel)
+               uptime_panel, weekly_panel)
 from .cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
 from .runtime_monitor import start_runtime_monitor_task
 from .screenshot import start_live_screenshot_task, start_screenshot_task
@@ -128,6 +128,10 @@ itsm_cache = itsm_panel.PanelCache()
 # muestreador la alimenta desde el mismo cache del ITSM, para no tener dos
 # caminos distintos hacia el flow.
 cola_history = cola_panel.ColaHistory(cola_panel.history_path(_CONFIG_PATH))
+
+# El agregado semanal lo publica OTRO flow, con su propia URL en el .env.
+weekly_client: httpx.AsyncClient | None = None
+weekly_cache = weekly_panel.PanelCache()
 # Pedidos de recaptura de GIF desde la consola; la crea el lifespan.
 recapture_queue: "asyncio.Queue[str] | None" = None
 
@@ -151,7 +155,7 @@ async def _cola_counts():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global proxy_client, panel_client, prtg_client, itsm_client
+    global proxy_client, panel_client, prtg_client, itsm_client, weekly_client
     proxy_client = httpx.AsyncClient(verify=False, timeout=30, follow_redirects=True)
     panel_client = httpx.AsyncClient(timeout=uptime_panel.DEFAULT_TIMEOUT_SECONDS,
                                      follow_redirects=True)
@@ -162,6 +166,9 @@ async def lifespan(app: FastAPI):
     itsm_client = httpx.AsyncClient(timeout=itsm_panel.DEFAULT_TIMEOUT_SECONDS,
                                     follow_redirects=True)
     itsm_cache.ttl_seconds = itsm_panel.panel_settings(manager.config)["refresh_seconds"]
+    weekly_client = httpx.AsyncClient(timeout=weekly_panel.DEFAULT_TIMEOUT_SECONDS,
+                                      follow_redirects=True)
+    weekly_cache.ttl_seconds = weekly_panel.panel_settings(manager.config)["refresh_seconds"]
     cola_settings = cola_panel.panel_settings(manager.config)
     cola_history.retention_days = cola_settings["retention_days"]
     logger.info("Serie de la cola: %d muestras cargadas de %s",
@@ -226,6 +233,7 @@ async def lifespan(app: FastAPI):
     await panel_client.aclose()
     await prtg_client.aclose()
     await itsm_client.aclose()
+    await weekly_client.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -722,6 +730,36 @@ async def cola_panel_page():
     view = await cola_panel_data()
     return HTMLResponse(
         cola_panel.render_html(view, poll_seconds=settings["poll_seconds"])
+    )
+
+
+@app.get("/api/weekly-panel")
+async def weekly_panel_data():
+    """Vista del panel de cumplimiento semanal en JSON."""
+    settings = weekly_panel.panel_settings(manager.config)
+    try:
+        return await weekly_cache.get(settings, weekly_client)
+    except Exception as exc:  # noqa: BLE001 - sin cache previa no hay que servir
+        raise HTTPException(
+            status_code=503,
+            detail=f"No se pudo leer el agregado semanal: {type(exc).__name__}",
+        )
+
+
+@app.get("/panel/weekly", response_class=HTMLResponse)
+async def weekly_panel_page():
+    """Panel de cumplimiento semanal. Ver el docstring de weekly_panel.py."""
+    settings = weekly_panel.panel_settings(manager.config)
+    try:
+        view = await weekly_cache.get(settings, weekly_client)
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(
+            weekly_panel.render_error_html(
+                str(exc) if isinstance(exc, (ValueError, RuntimeError)) else type(exc).__name__),
+            status_code=200,
+        )
+    return HTMLResponse(
+        weekly_panel.render_html(view, poll_seconds=settings["poll_seconds"])
     )
 
 

@@ -11,7 +11,7 @@
 #   de su ultima IP conocida); igual se recomienda reserva DHCP.
 services:
   quiosco:
-    image: cipotato/quiosco:0.1.17
+    image: cipotato/quiosco:0.1.18
     init: true
     ports:
       - "8000:8000"
@@ -29,6 +29,9 @@ services:
       # URL con SAS del flow OPS - ITSM Panel Aggregate (http). Es la
       # credencial: va en el .env de la maquina, nunca en config.json.
       - ITSM_PANEL_FLOW_URL=${ITSM_PANEL_FLOW_URL:-}
+      # URL con SAS del flow OPS - ITSM Weekly Compliance, que es OTRA
+      # distinta de la anterior. Tambien vive solo en el .env.
+      - ITSM_WEEKLY_FLOW_URL=${ITSM_WEEKLY_FLOW_URL:-}
     volumes:
       - ./config.json:/app/config.json
       - ./static/screenshots:/app/static/screenshots
