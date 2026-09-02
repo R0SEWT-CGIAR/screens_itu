@@ -1,3 +1,4 @@
+import inspect
 import json
 import tempfile
 import unittest
@@ -196,3 +197,23 @@ class MainRouteTests(unittest.TestCase):
         self.assertIn("Suite en vivo", html)
         self.assertNotIn("/api/current/", html)
         self.assertNotIn("startup-check-complete", html)
+
+
+class CableadoDelMuestreadorTest(unittest.TestCase):
+    """Guard del cableado que se rompio una vez y no se vio en los tests.
+
+    Un parche dejo el @asynccontextmanager de lifespan puesto en _cola_counts:
+    la app arrancaba y servia igual, pero el muestreador reventaba con
+    TypeError en cada vuelta y la serie de la cola no crecia nunca.
+    """
+
+    def test_la_fuente_de_contadores_es_una_corrutina(self):
+        self.assertTrue(inspect.iscoroutinefunction(main._cola_counts))
+
+    def test_lifespan_es_un_context_manager_asincrono(self):
+        self.assertFalse(inspect.isasyncgenfunction(main.lifespan))
+        self.assertTrue(hasattr(main.lifespan("app"), "__aenter__"))
+
+
+if __name__ == "__main__":
+    unittest.main()

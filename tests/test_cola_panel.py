@@ -1,5 +1,6 @@
 """Tests del panel de como va la cola (quiosco-2jp.1)."""
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -197,6 +198,71 @@ class CurvaTest(unittest.TestCase):
         recortadas = cola_panel._submuestrear(muestras, tope=50)
         self.assertEqual(len(recortadas), 50)
         self.assertIs(recortadas[-1], muestras[-1])
+
+
+class MuestreadorTest(unittest.IsolatedAsyncioTestCase):
+    """El lazo que anota. Sin este test, un fallo del cableado solo se ve en
+    produccion y encima disfrazado: la pagina sirve igual, con la serie
+    congelada."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.history = cola_panel.ColaHistory(
+            Path(self.dir.name) / "data" / "cola-history.jsonl")
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    async def _una_vuelta(self, fuente):
+        tarea = cola_panel.start_sampler_task(self.history, fuente, interval_seconds=3600)
+        for _ in range(50):
+            await asyncio.sleep(0)
+            if self.history.samples:
+                break
+        tarea.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await tarea
+        return tarea
+
+    async def test_anota_lo_que_devuelve_la_fuente(self):
+        async def fuente():
+            return {"breached_ttf": 63, "active": 82}
+        await self._una_vuelta(fuente)
+        self.assertEqual(self.history.samples[-1]["breached_ttf"], 63)
+        self.assertTrue(self.history.path.exists())
+
+    async def test_una_fuente_que_no_es_corrutina_falla_ruidosamente(self):
+        # Es el fallo que se colo: el decorador de lifespan quedo puesto en la
+        # fuente, asi que 'await fuente()' reventaba con TypeError y la serie
+        # se quedaba vacia sin que la pagina se viera mal.
+        def fuente_mala():
+            return {"breached_ttf": 63}
+        tarea = cola_panel.start_sampler_task(self.history, fuente_mala, interval_seconds=3600)
+        with self.assertLogs("quiosco.cola_panel", level="ERROR") as log:
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if log.output:
+                    break
+        tarea.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await tarea
+        self.assertIn("TypeError", log.output[0])
+        self.assertEqual(self.history.samples, [])
+
+    async def test_sin_contadores_avisa_y_no_anota(self):
+        async def fuente():
+            return None
+        tarea = cola_panel.start_sampler_task(self.history, fuente, interval_seconds=3600)
+        with self.assertLogs("quiosco.cola_panel", level="WARNING") as log:
+            for _ in range(50):
+                await asyncio.sleep(0)
+                if log.output:
+                    break
+        tarea.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await tarea
+        self.assertEqual(self.history.samples, [])
+        self.assertIn("no dio contadores", log.output[0])
 
 
 class SettingsTest(unittest.TestCase):

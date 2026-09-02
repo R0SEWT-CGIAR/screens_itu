@@ -132,7 +132,6 @@ cola_history = cola_panel.ColaHistory(cola_panel.history_path(_CONFIG_PATH))
 recapture_queue: "asyncio.Queue[str] | None" = None
 
 
-@asynccontextmanager
 async def _cola_counts():
     """Contadores del agregado para la serie de la cola.
 
@@ -150,6 +149,7 @@ async def _cola_counts():
     return itsm_cache.last_counts()
 
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     global proxy_client, panel_client, prtg_client, itsm_client
     proxy_client = httpx.AsyncClient(verify=False, timeout=30, follow_redirects=True)

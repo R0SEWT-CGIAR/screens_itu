@@ -491,7 +491,7 @@ wheels = [
 
 [[package]]
 name = "quiosco"
-version = "0.1.16"
+version = "0.1.17"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
