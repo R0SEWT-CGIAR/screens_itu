@@ -428,6 +428,34 @@ class PanelCache:
             return None
         return time.monotonic() - self._fetched_monotonic
 
+    # Claves de counts que se sabe leer. El agregado puede traer mas (esta
+    # previsto no_deadline) y por eso se filtra por lista conocida en vez de
+    # copiar el dict entero: una clave nueva no debe entrar a la serie de la
+    # cola sin que nadie haya decidido como se pinta.
+    COUNT_KEYS = ("breached_ttf", "breached_ttr", "untriaged", "waiting_user",
+                  "active", "no_deadline")
+
+    def last_counts(self) -> Optional[dict]:
+        """Contadores crudos del ultimo agregado bueno.
+
+        El panel de tickets no muestra 'active' y por eso build_view no lo
+        propaga, pero la serie de la cola si lo necesita: aqui se leen del
+        payload, no de la vista.
+        """
+        if self._payload is None:
+            return None
+        c = self._payload.get("counts")
+        if not isinstance(c, dict):
+            return None
+        salida = {}
+        for k in self.COUNT_KEYS:
+            if k in c:
+                try:
+                    salida[k] = int(c[k] or 0)
+                except (TypeError, ValueError):
+                    continue
+        return salida or None
+
     async def get(self, settings: dict, client: httpx.AsyncClient) -> dict:
         async with self._lock:
             age = self._age()

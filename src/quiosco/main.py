@@ -15,7 +15,8 @@ from pydantic import BaseModel
 
 from pathlib import Path
 
-from . import config_store, health, itsm_panel, prtg_panel, uptime_panel
+from . import (cola_panel, config_store, health, itsm_panel, prtg_panel,
+               uptime_panel)
 from .cast_manager import CastManager, WATCHDOG_INTERVAL_SECONDS
 from .runtime_monitor import start_runtime_monitor_task
 from .screenshot import start_live_screenshot_task, start_screenshot_task
@@ -122,11 +123,33 @@ prtg_cache = prtg_panel.PanelCache()
 # credenciales de SharePoint. La URL lleva el SAS y va por entorno.
 itsm_client: httpx.AsyncClient | None = None
 itsm_cache = itsm_panel.PanelCache()
+
+# La serie de la cola se guarda en el volumen montado, junto al config.json. El
+# muestreador la alimenta desde el mismo cache del ITSM, para no tener dos
+# caminos distintos hacia el flow.
+cola_history = cola_panel.ColaHistory(cola_panel.history_path(_CONFIG_PATH))
 # Pedidos de recaptura de GIF desde la consola; la crea el lifespan.
 recapture_queue: "asyncio.Queue[str] | None" = None
 
 
 @asynccontextmanager
+async def _cola_counts():
+    """Contadores del agregado para la serie de la cola.
+
+    Pasa por el cache del panel de tickets a proposito: si el muestreador
+    pegara al flow por su cuenta habria dos ventanas de refresco distintas
+    contra la misma URL, y el flow no es gratis.
+    """
+    settings = itsm_panel.panel_settings(manager.config)
+    if not settings["flow_url"]:
+        return None
+    try:
+        await itsm_cache.get(settings, itsm_client)
+    except Exception:  # noqa: BLE001 - puede no haber ni una lectura buena aun
+        pass
+    return itsm_cache.last_counts()
+
+
 async def lifespan(app: FastAPI):
     global proxy_client, panel_client, prtg_client, itsm_client
     proxy_client = httpx.AsyncClient(verify=False, timeout=30, follow_redirects=True)
@@ -139,6 +162,10 @@ async def lifespan(app: FastAPI):
     itsm_client = httpx.AsyncClient(timeout=itsm_panel.DEFAULT_TIMEOUT_SECONDS,
                                     follow_redirects=True)
     itsm_cache.ttl_seconds = itsm_panel.panel_settings(manager.config)["refresh_seconds"]
+    cola_settings = cola_panel.panel_settings(manager.config)
+    cola_history.retention_days = cola_settings["retention_days"]
+    logger.info("Serie de la cola: %d muestras cargadas de %s",
+                cola_history.load(), cola_history.path)
     manager.connect()
     # Sin esto un reboot deja los Chromecast conectados pero en negro: connect()
     # no rota. Los que no esten listos aun los recoge el watchdog.
@@ -179,6 +206,8 @@ async def lifespan(app: FastAPI):
         )
     watchdog_task = manager.start_watchdog_task(interval_seconds=WATCHDOG_INTERVAL_SECONDS)
     runtime_monitor_task = start_runtime_monitor_task()
+    cola_sampler_task = cola_panel.start_sampler_task(
+        cola_history, _cola_counts, cola_settings["sample_seconds"])
     yield
     if screenshot_task:
         screenshot_task.cancel()
@@ -190,6 +219,8 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(watchdog_task, return_exceptions=True)
     runtime_monitor_task.cancel()
     await asyncio.gather(runtime_monitor_task, return_exceptions=True)
+    cola_sampler_task.cancel()
+    await asyncio.gather(cola_sampler_task, return_exceptions=True)
     manager.disconnect()
     await proxy_client.aclose()
     await panel_client.aclose()
@@ -663,6 +694,34 @@ async def itsm_panel_page():
         )
     return HTMLResponse(
         itsm_panel.render_html(view, poll_seconds=settings["poll_seconds"])
+    )
+
+
+@app.get("/api/cola-panel")
+async def cola_panel_data():
+    """Vista del panel de la cola en JSON. La consume el poll de la pagina."""
+    settings = cola_panel.panel_settings(manager.config)
+    itsm_settings = itsm_panel.panel_settings(manager.config)
+    return cola_panel.build_view(
+        cola_history.window(settings["window_hours"]),
+        window_hours=settings["window_hours"],
+        sample_seconds=settings["sample_seconds"],
+        week_weekday=itsm_settings["week_weekday"],
+        week_time=itsm_settings["week_time"],
+    )
+
+
+@app.get("/panel/cola", response_class=HTMLResponse)
+async def cola_panel_page():
+    """Panel de como va la cola. Ver el docstring de cola_panel.py.
+
+    No falla por falta de datos: una serie vacia es un estado legitimo el dia
+    que se estrena el panel, y el propio panel lo explica en pantalla.
+    """
+    settings = cola_panel.panel_settings(manager.config)
+    view = await cola_panel_data()
+    return HTMLResponse(
+        cola_panel.render_html(view, poll_seconds=settings["poll_seconds"])
     )
 
 
