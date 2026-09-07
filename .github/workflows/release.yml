@@ -1,0 +1,74 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+# El build y el push pasan a vivir aca. Antes cada release se armaba en la
+# laptop, y como el bump de version invalidaba la capa de Chromium, cada
+# publicacion dejaba ~1.7 GB de capas nuevas en el disco local: 18 tags
+# llegaron a ocupar 31 GB. Ahora el cache pesado queda en GitHub y la
+# laptop solo hace docker pull de la version que quiere probar.
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version desde el tag
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # El tag es el que manda, pero pyproject.toml y uv.lock siguen
+      # cargando la version adentro. Si se separan, la imagen queda
+      # etiquetada distinto de lo que reporta el proyecto.
+      - name: El tag coincide con pyproject.toml
+        run: |
+          pv=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          echo "pyproject.toml: ${pv} | tag: ${{ steps.v.outputs.version }}"
+          if [ "${pv}" != "${{ steps.v.outputs.version }}" ]; then
+            echo "::error::pyproject.toml dice ${pv} pero el tag es ${{ steps.v.outputs.version }}"
+            exit 1
+          fi
+
+      # Los compose de despliegue fijan la imagen por version. Si el tag
+      # avanza y esos archivos se quedan atras, exodia y el quiosco de
+      # Windows siguen levantando la version anterior sin avisar. No corta
+      # el release: puede que el bump de despliegue venga despues a
+      # proposito.
+      - name: Los compose de despliegue apuntan a esta version
+        run: |
+          for f in docker-compose.exodia.yml docker-compose.windows.yml; do
+            pinned=$(grep -m1 -oE 'cipotato/quiosco:[^ ]+' "$f" | cut -d: -f2)
+            if [ "${pinned}" != "${{ steps.v.outputs.version }}" ]; then
+              echo "::warning file=${f}::fija ${pinned} y se esta publicando ${{ steps.v.outputs.version }}"
+            else
+              echo "${f}: ${pinned} OK"
+            fi
+          done
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # No se publica una imagen con los tests en rojo.
+      - run: uv sync --frozen
+      - run: uv run python -m unittest discover -s tests
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            cipotato/quiosco:${{ steps.v.outputs.version }}
+            cipotato/quiosco:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

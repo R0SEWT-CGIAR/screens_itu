@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Los tests mockean el navegador, asi que no hace falta instalar
+      # Chromium aca: 434 casos corren en poco mas de un segundo.
+      - run: uv sync --frozen
+      - run: uv run python -m unittest discover -s tests -v
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # El ARG del Dockerfile decide que Chromium se instala. Si se separa
+      # de la version de playwright en uv.lock, el runtime busca un
+      # navegador que no esta y la falla aparece recien al capturar, ya en
+      # produccion. Mejor romper el build aca.
+      - name: PLAYWRIGHT_VERSION del Dockerfile coincide con uv.lock
+        run: |
+          dockerfile_v=$(grep -m1 '^ARG PLAYWRIGHT_VERSION=' Dockerfile | cut -d= -f2)
+          lock_v=$(awk '/^name = "playwright"$/ { getline; gsub(/[^0-9.]/, "", $0); print; exit }' uv.lock)
+          echo "Dockerfile: ${dockerfile_v} | uv.lock: ${lock_v}"
+          if [ "${dockerfile_v}" != "${lock_v}" ]; then
+            echo "::error::PLAYWRIGHT_VERSION=${dockerfile_v} no coincide con playwright ${lock_v} de uv.lock"
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Buildea sin publicar: valida el Dockerfile en cada PR y deja la
+      # capa de Chromium en el cache de GitHub, no en el disco de nadie.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
