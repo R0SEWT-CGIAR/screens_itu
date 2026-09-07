@@ -309,6 +309,27 @@ class CastManagerSubnetScanTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertEqual(len(probes), first_count)
 
+    def test_maquina_recien_arrancada_no_cae_en_el_cooldown(self):
+        """En Linux time.monotonic() cuenta desde el arranque, asi que un manager
+        nuevo en una maquina con poco uptime no debe leerse como 'ya busque hace
+        un rato'. Con el centinela en 0.0 esto se saltaba el barrido y el discovery
+        durante los primeros 120 y 60 segundos del arranque de exodia."""
+        probes = []
+        self.manager._probe_cast_port = lambda host, port: probes.append(host) or False
+        self.manager._device_name = lambda host: None
+
+        # monotonic apenas por encima de cero = maquina recien encendida.
+        with patch("quiosco.cast_manager.time.monotonic", return_value=0.5):
+            self.manager._scan_subnet_for_device("Test Chromecast", "10.0.0.160", 8009)
+            self.assertEqual(len(probes), 254)
+
+            with patch(
+                "quiosco.cast_manager.pychromecast.discovery.discover_listed_chromecasts",
+                side_effect=RuntimeError("mDNS unavailable"),
+            ) as discover:
+                self.manager._discover_by_name("Test Chromecast")
+            self.assertEqual(discover.call_count, 1)
+
     def test_scan_rejects_invalid_or_ipv6_host(self):
         self.manager._probe_cast_port = lambda host, port: True
         self.manager._device_name = lambda host: "Test Chromecast"

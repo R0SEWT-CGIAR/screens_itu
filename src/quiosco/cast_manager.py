@@ -144,8 +144,15 @@ class CastManager:
         # cuando el poll a /api/current devuelve una distinta.
         self.config_revision: int = 1
         self.proxy_base: str = proxy_base
-        self._last_discovery_time: float = 0.0
-        self._last_subnet_scan_time: float = 0.0
+        # -inf y no 0.0: time.monotonic() cuenta desde el arranque de la maquina,
+        # asi que un 0.0 no dice "nunca busque" sino "hace tanto como el uptime".
+        # Recien arrancada la maquina eso cae dentro del cooldown, y tanto el
+        # discovery mDNS como su fallback de barrido se saltaban en silencio sus
+        # primeros 60 y 120 segundos -- justo cuando exodia enciende sola y los
+        # Chromecast pueden traer IP nueva de DHCP. El centinela tiene que decir
+        # "nunca", no "en el instante del arranque".
+        self._last_discovery_time: float = float("-inf")
+        self._last_subnet_scan_time: float = float("-inf")
         self._link_availability: dict[str, tuple[float, bool]] = {}
         self.states: dict[str, CastState] = {}
         overrides = self._load_runtime_state()
